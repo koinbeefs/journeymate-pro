@@ -769,7 +769,7 @@ export default function NavigationPage() {
         {isNavigating && nextStep && (
           <motion.div
             initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -50, opacity: 0 }}
-            className="absolute top-16 left-4 right-4 z-30"
+            className="absolute top-16 left-4 z-30 w-full max-w-[280px]"
           >
             <Card className="border-0 shadow-travel-lg bg-primary text-primary-foreground overflow-hidden">
               <CardContent className="p-3.5">
