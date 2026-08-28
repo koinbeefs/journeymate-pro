@@ -13,5 +13,8 @@ start "Queue Worker" cmd /k "cd backend && php artisan queue:listen"
 echo Starting Vite Frontend Server (Port 8080)...
 start "Vite Frontend" cmd /k "npm run dev"
 
+echo Starting ngrok tunnel (Port 8080)...
+start "ngrok Tunnel" cmd /k "ngrok http 8080"
+
 echo All services have been started in separate windows!
 echo You can close this window now.
