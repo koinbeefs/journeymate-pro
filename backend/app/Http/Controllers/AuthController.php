@@ -73,17 +73,43 @@ class AuthController extends Controller
         $user->setAttribute('stats', $user->calculateStats());
         return response()->json($user);
     }
-    public function googleRedirect()
+
+    /**
+     * Reliably detect the real origin (scheme + host) even through proxy chains.
+     * ngrok/Vite proxy may not always forward X-Forwarded-Proto correctly.
+     */
+    private function getRealOrigin(Request $request): string
     {
-        $redirectUri = env('GOOGLE_REDIRECT_URI', 'http://localhost:8000/api/auth/google/callback');
+        $host = $request->getHost();
+        
+        // If the host is a known HTTPS-only service, force https
+        if (str_contains($host, 'ngrok') || str_contains($host, 'railway')) {
+            return "https://{$host}";
+        }
+        
+        // Otherwise trust Laravel's detection (TrustProxies + X-Forwarded-Proto)
+        return $request->getSchemeAndHttpHost();
+    }
+
+    public function googleRedirect(Request $request)
+    {
+        $origin = $this->getRealOrigin($request);
+        $redirectUri = "{$origin}/api/auth/google/callback";
+        
+        \Illuminate\Support\Facades\Log::info("Google Redirect URI generated: " . $redirectUri);
+        
         config(['services.google.redirect' => $redirectUri]);
         
         return Socialite::driver('google')->stateless()->redirect();
     }
 
-    public function googleCallback()
+    public function googleCallback(Request $request)
     {
         try {
+            $origin = $this->getRealOrigin($request);
+            $redirectUri = "{$origin}/api/auth/google/callback";
+            config(['services.google.redirect' => $redirectUri]);
+
             $googleUser = Socialite::driver('google')->stateless()->user();
 
             // Find existing user or create new one
@@ -100,15 +126,14 @@ class AuthController extends Controller
             $token = $user->createToken('auth_token')->plainTextToken;
             $user->setAttribute('stats', $user->calculateStats());
 
-            $frontendUrl = rtrim(env('FRONTEND_URL', 'http://localhost:8080'), '/');
-
-            return redirect("{$frontendUrl}/auth/callback?token={$token}");
+            // Same origin — no port needed since frontend and API share the same host via proxy
+            return redirect("{$origin}/auth/callback?token={$token}");
 
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Google Login Error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-            $frontendUrl = rtrim(env('FRONTEND_URL', 'http://localhost:8080'), '/');
+            $origin = $this->getRealOrigin($request);
 
-            return redirect("{$frontendUrl}/login?error=" . urlencode("Google login failed: " . $e->getMessage()));
+            return redirect("{$origin}/login?error=" . urlencode("Google login failed: " . $e->getMessage()));
         }
     }
 }

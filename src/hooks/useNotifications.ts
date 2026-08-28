@@ -1,5 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useAuth } from "@/auth/AuthProvider";
 import { notificationsApi } from "@/lib/api";
+import echo from '@/lib/echo';
 
 export function useNotifications() {
   const queryClient = useQueryClient();
@@ -10,8 +13,22 @@ export function useNotifications() {
       const response = await notificationsApi.getAll();
       return response.data;
     },
-    refetchInterval: 30000, // Poll notifications every 30s
   });
+
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = echo.private(`App.Models.User.${user.id}`);
+    channel.listen('NotificationReceived', () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    });
+
+    return () => {
+      echo.leave(`App.Models.User.${user.id}`);
+    };
+  }, [user, queryClient]);
 
   const markReadMutation = useMutation({
     mutationFn: (id: string) => notificationsApi.markRead(id),

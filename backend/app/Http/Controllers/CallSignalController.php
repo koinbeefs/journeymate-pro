@@ -23,6 +23,8 @@ class CallSignalController extends Controller
             'payload' => $request->payload,
         ]);
 
+        broadcast(new \App\Events\CallSignalSent(['id' => $signal->id, 'type' => 'ping'], $request->to_id));
+
         return response()->json($signal, 201);
     }
 

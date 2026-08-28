@@ -8,6 +8,7 @@ import { useAuth } from "@/auth/AuthProvider";
 // call useTracking() — eliminates duplicate POST /users/location every 30s.
 let locationIntervalId: ReturnType<typeof setInterval> | null = null;
 let locationIntervalUsers = 0;
+let lastLocationUpdate = 0;
 
 export function useTracking() {
   const { user } = useAuth();
@@ -27,9 +28,16 @@ export function useTracking() {
     }
 
     const updateLoc = () => {
+      const now = Date.now();
+      // Throttle: don't send if we already sent in the last 25 seconds
+      if (now - lastLocationUpdate < 25000) return;
+      
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(
-        (pos) => trackingApi.updateLocation(pos.coords.latitude, pos.coords.longitude).catch(() => {}),
+        (pos) => {
+          lastLocationUpdate = Date.now();
+          trackingApi.updateLocation(pos.coords.latitude, pos.coords.longitude).catch(() => {});
+        },
         () => {} // Silently ignore permission/availability errors
       );
     };

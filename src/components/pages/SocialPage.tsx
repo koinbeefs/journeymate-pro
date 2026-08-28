@@ -65,8 +65,8 @@ function TrackingMap({ centerLat, centerLng, members, showHeatmap, trackingTrail
       attributionControl: false,
     });
 
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-      subdomains: "abcd",
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "",
       maxZoom: 19,
     }).addTo(map);
 

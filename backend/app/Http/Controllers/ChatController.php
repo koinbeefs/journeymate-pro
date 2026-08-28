@@ -51,6 +51,9 @@ class ChatController extends Controller
             'type' => $request->input('type', 'text')
         ]);
 
-        return response()->json($message->load('user'), 201);
+        $message->load('user');
+        broadcast(new \App\Events\MessageSent($message, $tripId))->toOthers();
+
+        return response()->json($message, 201);
     }
 }

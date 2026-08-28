@@ -1,6 +1,7 @@
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { tripsApi, itinerariesApi } from "@/lib/api";
+import echo from "@/lib/echo";
 import { repo } from "@/lib/storage";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import type { Trip, ItineraryStop, TransitType, WeatherCondition } from "@/types/travel";
@@ -106,8 +107,68 @@ export function useTrip(initialId?: string) {
       })) as Trip[];
     },
     placeholderData: keepPreviousData,
-    refetchInterval: 15000, // Poll every 15 seconds to fetch latest live tracking coordinates
   });
+
+  useEffect(() => {
+    if (trips.length === 0) return;
+    
+    trips.forEach(trip => {
+      echo.join(`trip.${trip.id}`)
+        .here((users: any[]) => {
+          // Mark users as online
+          queryClient.setQueryData(['trips'], (oldData: any[]) => {
+              if (!oldData) return oldData;
+              const onlineIds = users.map(u => String(u.id));
+              return oldData.map((t: any) => {
+                if (t.id !== trip.id) return t;
+                const c = t.collaborators.map((c: any) => ({ ...c, isOnline: onlineIds.includes(c.id) }));
+                const o = t.owner ? { ...t.owner, isOnline: onlineIds.includes(t.owner.id) } : t.owner;
+                return { ...t, collaborators: c, owner: o };
+              });
+          });
+        })
+        .joining((user: any) => {
+          queryClient.setQueryData(['trips'], (oldData: any[]) => {
+              if (!oldData) return oldData;
+              return oldData.map((t: any) => {
+                if (t.id !== trip.id) return t;
+                const c = t.collaborators.map((c: any) => c.id === String(user.id) ? { ...c, isOnline: true } : c);
+                const o = t.owner?.id === String(user.id) ? { ...t.owner, isOnline: true } : t.owner;
+                return { ...t, collaborators: c, owner: o };
+              });
+          });
+        })
+        .leaving((user: any) => {
+          queryClient.setQueryData(['trips'], (oldData: any[]) => {
+              if (!oldData) return oldData;
+              return oldData.map((t: any) => {
+                if (t.id !== trip.id) return t;
+                const c = t.collaborators.map((c: any) => c.id === String(user.id) ? { ...c, isOnline: false } : c);
+                const o = t.owner?.id === String(user.id) ? { ...t.owner, isOnline: false } : t.owner;
+                return { ...t, collaborators: c, owner: o };
+              });
+          });
+        })
+        .listen('LocationUpdated', (e: any) => {
+          queryClient.setQueryData(['trips'], (oldData: any[]) => {
+              if (!oldData) return oldData;
+              return oldData.map((t: any) => {
+                if (t.id !== trip.id) return t;
+                const c = t.collaborators.map((c: any) => c.id === String(e.locationData.user_id) 
+                  ? { ...c, lastLocation: { lat: e.locationData.lat, lng: e.locationData.lng } } : c);
+                const o = t.owner?.id === String(e.locationData.user_id) 
+                  ? { ...t.owner, lastLocation: { lat: e.locationData.lat, lng: e.locationData.lng } } : t.owner;
+                return { ...t, collaborators: c, owner: o };
+              });
+          });
+        });
+    });
+
+    return () => {
+        trips.forEach(trip => echo.leave(`trip.${trip.id}`));
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trips.map(t => t.id).join(','), queryClient]);
 
   const effectiveActiveId = activeId !== undefined ? String(activeId) : (trips.length > 0 ? String(trips[0].id) : undefined);
   const activeBase = trips.find(t => String(t.id) === effectiveActiveId) ?? trips[0];
