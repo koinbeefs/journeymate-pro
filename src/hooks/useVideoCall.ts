@@ -164,8 +164,11 @@ export function useVideoCall(
     if (!localUserId || !incomingCall) return;
     try {
       const { localStream: ls, remoteStream: rs } = await acceptCall(
-        incomingCall.conversationId, localUserId, incomingCall.from,
-        incomingCall.offerSdp, incomingCall.mode,
+        incomingCall.conversationId,
+        localUserId,
+        incomingCall.from,
+        incomingCall.offerSdp,
+        incomingCall.mode
       );
       setLocalStream(ls);
       setRemoteStream(rs);

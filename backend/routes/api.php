@@ -22,6 +22,9 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/auth/google', [AuthController::class, 'googleRedirect']);
 Route::get('/auth/google/callback', [AuthController::class, 'googleCallback']);
 
+use Illuminate\Support\Facades\Broadcast;
+Broadcast::routes(['middleware' => ['auth:sanctum']]);
+
 // Currency (Public or Auth, keeping it Public for now so anyone can convert)
 Route::get('/currency/rates', [CurrencyController::class, 'latest']);
 

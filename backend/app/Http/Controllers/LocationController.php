@@ -21,6 +21,21 @@ class LocationController extends Controller
         $user->last_active_at = now();
         $user->save();
 
+        $trips = \App\Models\Trip::where('user_id', $user->id)
+            ->orWhereHas('users', function ($q) use ($user) {
+                $q->where('user_id', $user->id)->where('trip_user.status', 'accepted');
+            })->pluck('id');
+
+        $locationData = [
+            'user_id' => $user->id,
+            'lat' => $request->lat,
+            'lng' => $request->lng,
+        ];
+
+        foreach ($trips as $tripId) {
+            broadcast(new \App\Events\LocationUpdated($locationData, $tripId))->toOthers();
+        }
+
         return response()->json(['message' => 'Location updated']);
     }
 

@@ -169,9 +169,9 @@ export default function NavigationPage() {
   const hasAutoCentered = useRef(false);
 
   const tileUrls: Record<string, string> = {
-    voyager: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    voyager: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    dark: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    light: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     satellite: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
   };
 
@@ -265,17 +265,35 @@ export default function NavigationPage() {
     const map = L.map(mapRef.current, {
       center: startPoint, zoom: 13, zoomControl: false, attributionControl: false,
     });
-    tileRef.current = offlineTileLayer(tileUrls[mapStyle]).addTo(map);
+    const tileOptions = {
+      className: mapStyle === "dark" ? "map-tiles-dark" : "",
+    };
+    tileRef.current = offlineTileLayer(tileUrls[mapStyle], tileOptions).addTo(map);
     mapInstance.current = map;
     // User-initiated drag disables follow-mode so the map doesn't fight them
     map.on("dragstart", () => setFollowMode(false));
     setTimeout(() => map.invalidateSize(), 100);
-    return () => { map.remove(); mapInstance.current = null; };
+    return () => {
+      map.remove();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Switch tiles
-  useEffect(() => { tileRef.current?.setUrl(tileUrls[mapStyle]); }, [mapStyle]);
+  // Update map style when it changes
+  useEffect(() => { 
+    if (tileRef.current) {
+      tileRef.current.setUrl(tileUrls[mapStyle]); 
+      // Update className dynamically (Leaflet doesn't have a direct method for this, so we manipulate the DOM element)
+      const container = tileRef.current.getContainer();
+      if (container) {
+        if (mapStyle === "dark") {
+          container.classList.add("map-tiles-dark");
+        } else {
+          container.classList.remove("map-tiles-dark");
+        }
+      }
+    }
+  }, [mapStyle]);
 
   // Auto-center on user's location when it first becomes available
   useEffect(() => {

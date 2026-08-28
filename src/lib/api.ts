@@ -1,6 +1,15 @@
 import axios from 'axios';
 
-export const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+// In production, use the configured API URL.
+// In development, use a relative path so everything goes through Vite's proxy —
+// this works on localhost, raw IP, AND ngrok without any changes.
+const getApiUrl = () => {
+  if (import.meta.env.PROD) return import.meta.env.VITE_API_URL;
+  // Use absolute URL based on current origin to prevent Safari relative path resolution bugs
+  return `${window.location.origin}/api`;
+};
+
+export const API_URL = getApiUrl();
 
 // Create axios instance
 const api = axios.create({
@@ -8,6 +17,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
+    'ngrok-skip-browser-warning': 'true',
   },
 });
 
@@ -196,7 +206,7 @@ export const callSignalApi = {
   send: (conversationId: string, toId: number, payload: any) =>
     api.post('/calls/signal', { conversation_id: conversationId, to_id: toId, payload }),
   receive: () =>
-    api.get('/calls/signals'),
+    api.get(`/calls/signals?t=${Date.now()}`),
 };
 
 export default api;

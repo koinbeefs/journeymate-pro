@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { chatApi } from '@/lib/api';
+import echo from '@/lib/echo';
 
 export function useChat(tripId?: string) {
   const queryClient = useQueryClient();
@@ -12,11 +14,27 @@ export function useChat(tripId?: string) {
       return response.data.data || response.data || [];
     },
     enabled: !!tripId && !tripId.startsWith('t'),
-    // Poll every 1 second for messaging updates
-    refetchInterval: 1000,
-    refetchIntervalInBackground: true,
     placeholderData: keepPreviousData,
+    staleTime: 60000, // prevent duplicate fetches on strict mode double mounts
   });
+
+  useEffect(() => {
+    if (!tripId || tripId.startsWith('t')) return;
+
+    const channel = echo.private(`trip.${tripId}`);
+    channel.listen('MessageSent', (e: any) => {
+      queryClient.setQueryData(['chat', tripId], (oldData: any[]) => {
+        if (!oldData) return [e.message];
+        const exists = oldData.some(msg => msg.id === e.message.id);
+        if (exists) return oldData;
+        return [...oldData, e.message];
+      });
+    });
+
+    return () => {
+      echo.leave(`trip.${tripId}`);
+    };
+  }, [tripId, queryClient]);
 
   const sendMessage = useMutation({
     mutationFn: async (data: { content: string; type?: string; user?: { id: string; username: string; profile_pic?: string } }) => {

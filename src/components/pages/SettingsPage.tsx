@@ -83,6 +83,7 @@ export default function SettingsPage() {
   };
 
   const handleSignOut = () => {
+    signOut();
     toast({ title: "👋 Signed Out", description: "You've been signed out successfully." });
     setSignOutOpen(false);
   };

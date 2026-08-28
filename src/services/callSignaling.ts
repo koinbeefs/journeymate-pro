@@ -9,6 +9,7 @@
  * subscription when Cloud is enabled — public API stays identical.
  */
 
+import echo from '@/lib/echo';
 import { callSignalApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -47,11 +48,26 @@ const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    }
   ],
   iceTransportPolicy: "all",
 };
 
-const ICE_DISCONNECTED_TIMEOUT_MS = 5000;
+const ICE_DISCONNECTED_TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
 // Module state (singleton — only one call at a time)
@@ -112,48 +128,7 @@ function sanitizeSdp(sdp: string | undefined): string {
 // Mock signaling channel (BroadcastChannel — cross-tab, same origin)
 // ---------------------------------------------------------------------------
 
-let currentPollIntervalMs = 3000;
-
-function startPollingLoop(): void {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
-  }
-
-  pollInterval = setInterval(async () => {
-    try {
-      const response = await callSignalApi.receive();
-      const signals = response.data as any[];
-      let hasIncomingOffer = false;
-
-      for (const signalData of signals) {
-        const payload: SignalPayload = {
-          type: signalData.payload.type,
-          from: String(signalData.from_id),
-          to: String(signalData.to_id),
-          conversationId: signalData.conversation_id,
-          sdp: signalData.payload.sdp ? decodeURIComponent(signalData.payload.sdp) : undefined,
-          candidate: signalData.payload.candidate,
-          mode: signalData.payload.mode,
-        };
-
-        if (payload.type === "offer") {
-          currentRemoteUserId = payload.from;
-          hasIncomingOffer = true;
-        }
-
-        for (const listener of signalListeners) listener(payload);
-        void handleIncomingSignal(payload);
-      }
-
-      if (hasIncomingOffer && currentPollIntervalMs !== 1500) {
-        setSignalingSpeed("fast");
-      }
-    } catch (err) {
-      console.error("[Call] Failed to poll signals:", err);
-    }
-  }, currentPollIntervalMs);
-}
+let currentEchoChannel: any = null;
 
 function ensureSignalingChannel(conversationId: string, localUserId: string): void {
   if (currentConversationId === conversationId) return;
@@ -161,17 +136,47 @@ function ensureSignalingChannel(conversationId: string, localUserId: string): vo
   currentConversationId = conversationId;
   currentLocalUserId = localUserId;
 
-  startPollingLoop();
+  if (currentEchoChannel) {
+    echo.leave(`user.${localUserId}`);
+    currentEchoChannel = null;
+  }
+
+  currentEchoChannel = echo.private(`user.${localUserId}`)
+    .listen('CallSignalSent', async (payload: any) => {
+      // The WebSocket event now just sends a tiny ping.
+      // We must fetch the actual large signal payloads via the API.
+      try {
+        const response = await callSignalApi.receive();
+        const pendingSignals = response.data;
+
+        for (const signal of pendingSignals) {
+          const signalData = signal.payload;
+          
+          const outPayload: SignalPayload = {
+            type: signalData.type,
+            from: String(signal.from_id || signalData.from_id || signalData.from),
+            to: String(signal.to_id || signalData.to_id || signalData.to),
+            conversationId: signal.conversation_id || signalData.conversation_id || signalData.conversationId,
+            sdp: signalData.sdp ? decodeURIComponent(signalData.sdp) : undefined,
+            candidate: signalData.candidate,
+            mode: signalData.mode,
+          };
+
+          if (outPayload.type === "offer") {
+            currentRemoteUserId = outPayload.from;
+          }
+
+          for (const listener of signalListeners) listener(outPayload);
+          void handleIncomingSignal(outPayload);
+        }
+      } catch (err) {
+        console.error("[Call] Failed to receive pending signals:", err);
+      }
+    });
 }
 
 export function setSignalingSpeed(speed: "fast" | "slow"): void {
-  const newInterval = speed === "fast" ? 1500 : 3000;
-  if (currentPollIntervalMs === newInterval) return;
-
-  currentPollIntervalMs = newInterval;
-  if (currentConversationId && currentLocalUserId) {
-    startPollingLoop();
-  }
+  // No-op since we use WebSockets now instead of polling
 }
 
 async function sendSignal(payload: SignalPayload): Promise<void> {
@@ -506,9 +511,11 @@ export function cleanupCall(): void {
 
 export function cleanup(): void {
   cleanupCall();
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
+  if (currentEchoChannel && currentLocalUserId) {
+    import('@/lib/echo').then(({ default: echo }) => {
+      echo.leave(`user.${currentLocalUserId}`);
+    });
+    currentEchoChannel = null;
   }
   currentConversationId = null;
   currentLocalUserId = null;

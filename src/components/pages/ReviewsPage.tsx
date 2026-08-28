@@ -23,13 +23,6 @@ import api from "@/lib/api";
 const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } };
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.04 } } };
 
-// Mock external reviews mixed into the feed so source filters are meaningful.
-const externalSeed = [
-  { id: "g1", userId: "ext1", userName: "Jordan M. (Google)", userAvatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Jordan", locationId: "l1", locationName: "Intramuros", rating: 5, comment: "Beautiful walled city. Worth a full afternoon.", images: [] as string[], timestamp: "2026-05-21T10:00:00Z", helpful: 31, source: "google" as const },
-  { id: "g2", userId: "ext2", userName: "Aria S. (Google)", userAvatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Aria", locationId: "l7", locationName: "Tagaytay Ridge", rating: 4, comment: "Stunning view but crowded on weekends.", images: [], timestamp: "2026-04-12T10:00:00Z", helpful: 14, source: "google" as const },
-  { id: "g3", userId: "ext3", userName: "Diego R. (TripAdvisor)", userAvatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Diego", locationId: "l4", locationName: "Poblacion", rating: 5, comment: "Best nightlife in Manila, hands down.", images: [], timestamp: "2026-02-02T10:00:00Z", helpful: 22, source: "google" as const },
-];
-
 function HeatmapMap({ data }: { data: any[] }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
@@ -41,14 +34,16 @@ function HeatmapMap({ data }: { data: any[] }) {
     const map = L.map(mapRef.current, {
       center: [13.5, 121.0], zoom: 7, zoomControl: false, attributionControl: false,
     });
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png").addTo(map);
-    
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      className: "map-tiles-dark"
+    }).addTo(map);
+
     layerGroupRef.current = L.layerGroup().addTo(map);
     mapInstance.current = map;
 
-    return () => { 
-      map.remove(); 
-      mapInstance.current = null; 
+    return () => {
+      map.remove();
+      mapInstance.current = null;
       layerGroupRef.current = null;
     };
   }, []);
@@ -56,9 +51,9 @@ function HeatmapMap({ data }: { data: any[] }) {
   // 2. Render data when it changes
   useEffect(() => {
     if (!layerGroupRef.current) return;
-    
+
     layerGroupRef.current.clearLayers();
-    
+
     data.forEach((point: [number, number, number]) => {
       L.circle([point[0], point[1]], {
         radius: point[2] * 25000, color: "transparent",
@@ -121,7 +116,7 @@ export default function ReviewsPage() {
 
   const handleSubmitReview = async () => {
     if (!reviewText.trim() || !reviewLocation.trim() || !trip) return;
-    
+
     try {
       await createReview.mutateAsync({
         trip_id: trip.id.toString(),
@@ -129,7 +124,7 @@ export default function ReviewsPage() {
         rating: reviewRating,
         review_text: reviewText
       });
-      
+
       toast({ title: "⭐ Review Published!", description: `Your review of "${reviewLocation}" has been posted.` });
       setReviewText("");
       setReviewLocation("");
@@ -401,12 +396,12 @@ export default function ReviewsPage() {
               />
             </div>
           </div>
-          <Button 
-            className="w-full h-10 rounded-xl shadow-travel font-semibold" 
-            onClick={handleSubmitReview} 
+          <Button
+            className="w-full h-10 rounded-xl shadow-travel font-semibold"
+            onClick={handleSubmitReview}
             disabled={!reviewText.trim() || !reviewLocation.trim() || !trip || createReview.isPending}
           >
-            {createReview.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Star className="w-4 h-4 mr-1" />} 
+            {createReview.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Star className="w-4 h-4 mr-1" />}
             Publish Review
           </Button>
         </DialogContent>

@@ -67,7 +67,7 @@ class TripInvitationController extends Controller
         }
 
         // Create notification for the invitee
-        Notification::create([
+        $notification = Notification::create([
             'user_id' => $invitee->id,
             'type' => 'trip_invite',
             'title' => 'Trip Invitation',
@@ -83,6 +83,8 @@ class TripInvitationController extends Controller
             'action_label' => 'Accept',
             'action_type' => 'accept_invite',
         ]);
+
+        broadcast(new \App\Events\NotificationReceived($notification, $invitee->id));
 
         return response()->json(['message' => 'Invitation sent!', 'user' => [
             'id' => $invitee->id,

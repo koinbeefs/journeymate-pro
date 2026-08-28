@@ -34,10 +34,17 @@ export function VideoCallOverlay({
   }, [autoStart, call, remoteUserId]);
 
   useEffect(() => {
-    if (localRef.current && call.localStream) localRef.current.srcObject = call.localStream;
+    if (localRef.current && call.localStream) {
+      localRef.current.srcObject = call.localStream;
+      localRef.current.play().catch(console.warn);
+    }
   }, [call.localStream]);
+
   useEffect(() => {
-    if (remoteRef.current && call.remoteStream) remoteRef.current.srcObject = call.remoteStream;
+    if (remoteRef.current && call.remoteStream) {
+      remoteRef.current.srcObject = call.remoteStream;
+      remoteRef.current.play().catch(console.warn);
+    }
   }, [call.remoteStream]);
 
   useEffect(() => {
