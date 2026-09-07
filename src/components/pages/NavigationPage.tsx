@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Car, Bus, Footprints, Bike, ArrowRight, ArrowLeft, ArrowUp,
   CornerUpRight, CornerUpLeft, Flag, Gauge, Route, Locate,
-  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download,
+  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download, Map
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import { saveOfflineRoute, loadOfflineRoute, saveTripOffline } from "@/lib/offli
 import type { Location } from "@/types/travel";
 import { usePlaces } from "@/hooks/usePlaces";
 import { offlineTileLayer } from "@/lib/offlineMap";
+import { PlaceDetailsSheet } from "@/components/travel/PlaceDetailsSheet";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -88,12 +89,14 @@ function routeHasToll(coords: [number, number][] | undefined, mode: string) {
 }
 
 export default function NavigationPage() {
+  const [selectedPlace, setSelectedPlace] = useState<Location | null>(null);
   const [selectedMode, setSelectedMode] = useState<"car" | "transit" | "walk" | "bike">("car");
   const [isNavigating, setIsNavigating] = useState(false);
   const [voicePrefs, setVoicePrefs] = useState<VoicePrefs>(() => loadVoicePrefs());
   const [sheetExpanded, setSheetExpanded] = useState(true);
   const [mapStyle, setMapStyle] = useState<MapStyle>("voyager");
   const [route, setRoute] = useState<RouteResult | null>(null);
+  const [secondaryRoute, setSecondaryRoute] = useState<RouteResult | null>(null);
   const [alternates, setAlternates] = useState<RouteResult[]>([]);
   const [speedLimits, setSpeedLimits] = useState<any[]>([]);
   const [selectedAltIdx, setSelectedAltIdx] = useState<number>(0); // 0 = primary
@@ -141,13 +144,15 @@ export default function NavigationPage() {
   const startPoint: [number, number] = userPos ?? [14.5895, 120.9740];
   const { speak, cancel: cancelVoice } = useVoiceGuide(voicePrefs);
 
-  // Dynamic API places for near-route suggestions (restaurants + gas stations)
+  // Dynamic API places for near-route suggestions (restaurants, gas stations, viewpoints, hotels)
   const { places: routeRestaurants } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "restaurant" });
   const { places: routeGasStations } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "gas-station" });
+  const { places: routeViewpoints } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "viewpoint" });
+  const { places: routeHotels } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "hotel" });
 
   const suggestionsAlongRoute = useMemo(() => {
-    return [...routeRestaurants, ...routeGasStations];
-  }, [routeRestaurants, routeGasStations]);
+    return [...routeRestaurants, ...routeGasStations, ...routeViewpoints, ...routeHotels];
+  }, [routeRestaurants, routeGasStations, routeViewpoints, routeHotels]);
 
   // Weather along route (sampled at midpoint of current leg).
   const midCoord = route?.coordinates?.[Math.floor(route.coordinates.length / 2)];
@@ -156,11 +161,13 @@ export default function NavigationPage() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const secondaryPolylineRef = useRef<L.Polyline | null>(null);
   const altPolylinesRef = useRef<L.Polyline[]>([]);
   const traveledRef = useRef<L.Polyline | null>(null);
   const carMarkerRef = useRef<L.Marker | null>(null);
   const tileRef = useRef<L.TileLayer | null>(null);
   const destMarkerRef = useRef<L.Marker | null>(null);
+  const secondaryDestMarkerRef = useRef<L.Marker | null>(null);
   const startMarkerRef = useRef<L.Marker | null>(null);
   const eateryMarkersRef = useRef<L.Marker[]>([]);
   const accuracyRingRef = useRef<L.Circle | null>(null);
@@ -353,11 +360,19 @@ export default function NavigationPage() {
     const map = mapInstance.current;
     if (!map) return;
     destMarkerRef.current?.remove();
+    secondaryDestMarkerRef.current?.remove();
+
     if (destination) {
       destMarkerRef.current = L.marker([destination.lat, destination.lng], { icon: dot("#ef4444", 16) })
         .bindPopup(`🏁 ${destination.name}`).addTo(map);
     }
-  }, [destination?.id]);
+
+    if (tripStops.length > 1 && legIdx < tripStops.length - 1) {
+      const finalDest = tripStops[tripStops.length - 1];
+      secondaryDestMarkerRef.current = L.marker([finalDest.lat, finalDest.lng], { icon: dot("#6b7280", 14) })
+        .bindPopup(`🏁 ${finalDest.name} (Final Destination)`).addTo(map);
+    }
+  }, [destination?.id, tripStops, legIdx]);
 
   // Fetch route plan — only when destination or mode changes, NOT on every GPS update.
   // We lock the start position at fetch time so GPS drift does not trigger constant re-fetches
@@ -406,19 +421,48 @@ export default function NavigationPage() {
     return () => { cancelled = true; };
     // Intentionally excludes userPos/startPoint — GPS changes must NOT trigger route re-fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [destination?.id, selectedMode]);
+  }, [destination?.lat, destination?.lng, selectedMode]);
+
+  // Fetch secondary route if there's a side trip
+  useEffect(() => {
+    let cancelled = false;
+    if (tripStops.length > 1 && legIdx < tripStops.length - 1 && destination) {
+      const nextDest = tripStops[legIdx + 1];
+      fetchRoutePlan([destination.lat, destination.lng], [nextDest.lat, nextDest.lng], selectedMode)
+        .then(plan => {
+          if (!cancelled) setSecondaryRoute(plan.primary);
+        })
+        .catch(() => {
+          if (!cancelled) setSecondaryRoute(null);
+        });
+    } else {
+      setSecondaryRoute(null);
+    }
+    return () => { cancelled = true; };
+  }, [destination?.lat, destination?.lng, tripStops, legIdx, selectedMode]);
 
   // Draw primary + alternate polylines + eateries along the way.
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
     polylineRef.current?.remove();
+    secondaryPolylineRef.current?.remove();
     traveledRef.current?.remove();
     altPolylinesRef.current.forEach(p => p.remove());
     altPolylinesRef.current = [];
     eateryMarkersRef.current.forEach(m => m.remove());
     eateryMarkersRef.current = [];
     if (!route) return;
+
+    // Draw secondary route first (underneath everything)
+    if (secondaryRoute) {
+      secondaryPolylineRef.current = L.polyline(secondaryRoute.coordinates, {
+        color: "hsl(220, 10%, 55%)", // gray
+        weight: 4,
+        opacity: 0.6,
+        dashArray: "8, 8",
+      }).addTo(map);
+    }
 
     // Draw alternates first (underneath), muted + dashed.
     if (!tripMode) {
@@ -447,19 +491,23 @@ export default function NavigationPage() {
       color: "hsl(162, 72%, 25%)", weight: 6, opacity: 1,
     }).addTo(map);
 
-    // Suggestions (eateries + gas stations) near the active route from API
+    // Suggestions near the active route from API
     const activeRoute = selectedAltIdx === 0 ? route : alternates[selectedAltIdx - 1] ?? route;
     const itemsNearRoute = suggestionsAlongRoute.filter(l =>
       activeRoute.coordinates.some(([rlat, rlng]) => Math.hypot(rlat - l.lat, rlng - l.lng) < 0.05)
     );
     itemsNearRoute.forEach(e => {
-      const isGas = e.type === "gas-station";
-      const iconEmoji = isGas ? "⛽" : "🍽️";
-      const iconColor = isGas ? "#3b82f6" : "#f59e0b"; // blue for gas, amber for food
-      const labelText = isGas ? "gas station along your route" : "along your route";
+      const loc = e as any;
+      let iconColor = "#6b7280"; // gray default
+      if (loc.type === "viewpoint") iconColor = "#22c55e"; // green
+      else if (loc.type === "restaurant" || loc.category === "food") iconColor = "#eab308"; // yellow
+      else if (loc.type === "hotel" || loc.type === "accommodation") iconColor = "#3b82f6"; // blue
+      else if (loc.type === "gas-station") iconColor = "#f97316"; // orange
       
-      const mk = L.marker([e.lat, e.lng], { icon: dot(iconColor, 10) })
-        .bindPopup(`<strong>${iconEmoji} ${e.name}</strong><br/><small>${e.rating ? e.rating + "★ " : ""}${labelText}</small>`).addTo(map);
+      const mk = L.marker([e.lat, e.lng], { icon: dot(iconColor, 12) }).addTo(map);
+      mk.on("click", () => {
+        setSelectedPlace(e);
+      });
       eateryMarkersRef.current.push(mk);
     });
 
@@ -534,17 +582,45 @@ export default function NavigationPage() {
     }
   }, [isNavigating, cancelVoice]);
 
-  // Periodically suggest a nearby eatery while navigating
+  const lastSuggestedPlaceRef = useRef<string | null>(null);
+  const latestUserPos = useRef(userPos);
+  useEffect(() => { latestUserPos.current = userPos; }, [userPos]);
+
+  // Periodically suggest a nearby eatery or viewpoint while navigating
   useEffect(() => {
     if (!isNavigating || !route) return;
     const id = setInterval(() => {
-      const eateries = suggestionsAlongRoute.filter(l =>
-        (l.type === "restaurant" || l.type === "poi") &&
-        route.coordinates.some(([rlat, rlng]) => Math.hypot(rlat - l.lat, rlng - l.lng) < 0.05),
-      );
-      if (!eateries.length) return;
-      const pick = eateries[Math.floor(Math.random() * eateries.length)];
-      toast({ title: "🍽️ Eatery Ahead", description: `${pick.name} · ${pick.rating ?? ""}★` });
+      const pos = latestUserPos.current;
+      if (!pos) return;
+
+      const candidates = suggestionsAlongRoute.filter(l => {
+        const loc = l as any;
+        return (loc.type === "restaurant" || loc.type === "viewpoint" || loc.category === "food") &&
+        l.id !== lastSuggestedPlaceRef.current &&
+        distanceMeters({ lat: pos[0], lng: pos[1] }, { lat: l.lat, lng: l.lng }) < 10000 // within 10km
+      });
+      if (!candidates.length) return;
+
+      // Find the nearest one
+      let nearest = candidates[0];
+      let minDistance = Infinity;
+      candidates.forEach(c => {
+        const d = distanceMeters({ lat: pos[0], lng: pos[1] }, { lat: c.lat, lng: c.lng });
+        if (d < minDistance) {
+          minDistance = d;
+          nearest = c;
+        }
+      });
+
+      lastSuggestedPlaceRef.current = nearest.id || nearest.name;
+      const isViewpoint = nearest.type === "viewpoint";
+      const icon = isViewpoint ? "📸" : "🍽️";
+      const title = isViewpoint ? "Viewpoint Nearby" : "Eatery Ahead";
+
+      toast({ 
+        title: `${icon} ${title}`, 
+        description: `${nearest.name} is just ${(minDistance/1000).toFixed(1)}km away. ${nearest.rating ? nearest.rating + '★' : ''}` 
+      });
     }, 45000);
     return () => clearInterval(id);
   }, [isNavigating, route, suggestionsAlongRoute]);
@@ -961,6 +1037,11 @@ export default function NavigationPage() {
                   <div className="min-w-0 pr-2">
                     <h3 className="font-display font-bold text-[15px] truncate">{destination.name}</h3>
                     <p className="text-[10px] text-muted-foreground truncate">{destination.address || destination.description || "Unknown address"}</p>
+                    {tripStops.length > 0 && legIdx < tripStops.length - 1 && (
+                      <p className="text-[11px] font-semibold text-indigo-500 mt-1 flex items-center gap-1">
+                        <Map className="w-3 h-3" /> Side Trip — Then to: {tripStops[tripStops.length - 1].name}
+                      </p>
+                    )}
                     {showToll && (
                       <div className="flex items-center gap-1 text-[10px] font-semibold text-warning mt-1">
                         <Badge variant="outline" className="text-[8px] h-[16px] px-1 border-warning/30 text-warning bg-warning/10">Tolls</Badge>
@@ -980,13 +1061,33 @@ export default function NavigationPage() {
               )}
 
               {destination && (
-                <RouteDetailsPanel routeCoords={route?.coordinates} mode={selectedMode} speedLimits={speedLimits} steps={route?.steps} />
+                <RouteDetailsPanel routeCoords={route?.coordinates} mode={selectedMode} speedLimits={speedLimits} steps={route?.steps} onSelectPlace={setSelectedPlace} />
               )}
 
             </motion.div>
           )}
         </AnimatePresence>
       </motion.div>
+
+      <PlaceDetailsSheet
+        place={selectedPlace}
+        open={selectedPlace !== null}
+        onOpenChange={(open) => !open && setSelectedPlace(null)}
+        showDirections={true}
+        onNavigate={(p, action) => {
+          if (action === "add-side-trip" && destination) {
+            const finalDest = tripStops.length > 0 ? tripStops[tripStops.length - 1] : destination;
+            setTripStops([p, finalDest]);
+            setLegIdx(0);
+            setDestination(p);
+          } else {
+            setDestination(p);
+            setTripStops([]);
+            setLegIdx(0);
+          }
+          setSelectedPlace(null);
+        }}
+      />
     </div>
   );
 }

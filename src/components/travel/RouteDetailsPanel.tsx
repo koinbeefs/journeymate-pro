@@ -14,9 +14,10 @@ interface Props {
   mode: "car" | "transit" | "walk" | "bike";
   speedLimits?: { name: string; max_speed: number }[];
   steps?: RouteStep[];
+  onSelectPlace?: (place: any) => void;
 }
 
-export function RouteDetailsPanel({ routeCoords, mode, speedLimits, steps }: Props) {
+export function RouteDetailsPanel({ routeCoords, mode, speedLimits, steps, onSelectPlace }: Props) {
   const [open, setOpen] = useState(false);
 
   const { data: fuelStops = [] } = useQuery({
@@ -49,10 +50,10 @@ export function RouteDetailsPanel({ routeCoords, mode, speedLimits, steps }: Pro
         speedLimits[0]
       );
     }
-    return { name: "Unknown", max_speed: 0 };
+    return { name: "Highway", max_speed: 60 };
   }, [speedLimits]);
 
-  const limit = { kmh: maxSpeedInfo.max_speed, zone: maxSpeedInfo.name || "Unknown Zone" };
+  const limit = { kmh: maxSpeedInfo.max_speed, zone: maxSpeedInfo.name || "Highway" };
   
   // Real restrictions would come from backend too, keeping simple for now
   const restrictions: string[] = [];
@@ -90,8 +91,8 @@ export function RouteDetailsPanel({ routeCoords, mode, speedLimits, steps }: Pro
               <div className="p-3 pt-0 space-y-3">
                 <div className="grid grid-cols-2 gap-2">
                   <div className="flex items-center gap-2 p-2.5 rounded-xl bg-muted">
-                    <div className="w-9 h-9 rounded-full border-2 border-destructive flex items-center justify-center flex-shrink-0">
-                      <span className="text-[10px] font-bold">{limit.kmh}</span>
+                    <div className="w-9 h-9 rounded-full border-2 border-destructive flex items-center justify-center flex-shrink-0 bg-white">
+                      <span className="text-[12px] font-bold text-black">{limit.kmh}</span>
                     </div>
                     <div className="min-w-0">
                       <p className="text-[11px] font-semibold flex items-center gap-1"><Gauge className="w-3 h-3" /> Limit</p>
@@ -126,9 +127,13 @@ export function RouteDetailsPanel({ routeCoords, mode, speedLimits, steps }: Pro
                         </p>
                         <div className="space-y-1 max-h-40 overflow-y-auto pr-1 overscroll-contain">
                           {fuelStops.map((f: any) => (
-                            <div key={f.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                            <div 
+                              key={f.id} 
+                              className={`flex items-center justify-between p-2 rounded-lg bg-muted/50 ${onSelectPlace ? 'cursor-pointer hover:bg-muted active:scale-[0.98] transition-transform' : ''}`}
+                              onClick={() => onSelectPlace && onSelectPlace(f)}
+                            >
                               <span className="text-[11px] font-semibold truncate">{f.name}</span>
-                              <span className="text-[9px] text-muted-foreground whitespace-nowrap ml-2">★ {f.rating}</span>
+                              <span className="text-[9px] text-muted-foreground whitespace-nowrap ml-2">★ {f.rating || "N/A"}</span>
                             </div>
                           ))}
                         </div>
@@ -142,9 +147,13 @@ export function RouteDetailsPanel({ routeCoords, mode, speedLimits, steps }: Pro
                         </p>
                         <div className="space-y-1 max-h-40 overflow-y-auto pr-1 overscroll-contain">
                           {viewpoints.map((v: any) => (
-                            <div key={v.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                            <div 
+                              key={v.id} 
+                              className={`flex items-center justify-between p-2 rounded-lg bg-muted/50 ${onSelectPlace ? 'cursor-pointer hover:bg-muted active:scale-[0.98] transition-transform' : ''}`}
+                              onClick={() => onSelectPlace && onSelectPlace(v)}
+                            >
                               <span className="text-[11px] font-semibold truncate">{v.name}</span>
-                              <span className="text-[9px] text-muted-foreground whitespace-nowrap ml-2">★ {v.rating}</span>
+                              <span className="text-[9px] text-muted-foreground whitespace-nowrap ml-2">★ {v.rating || "N/A"}</span>
                             </div>
                           ))}
                         </div>

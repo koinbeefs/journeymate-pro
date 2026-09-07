@@ -137,7 +137,7 @@ export const placesApi = {
   autocomplete: (params: { query: string; lat: number; lng: number }) =>
     api.get('/places/autocomplete', { params }),
   getPhoto: (ref: string) =>
-    `${API_URL}/places/photo?ref=${ref}`,
+    `${API_URL}/places/photo?ref=${encodeURIComponent(ref)}`,
 };
 
 // Chat API

@@ -1,27 +1,37 @@
 // Shared place-details modal: photo gallery, historical info, app user reviews
 // (filterable by rating/recency/source/nearby), simulated Google reviews,
-// and an optional Get Directions button.
+// and an optional Get Directions / Add Side Trip button.
 import { useMemo, useState, useEffect } from "react";
-import { Star, Navigation, Share2, MapPin, BookOpen, MessageSquare, Globe, Images, Camera, Loader2, X } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Star, Navigation, Share2, MapPin, BookOpen, MessageSquare, Globe, Images, Camera, Loader2, X, Map } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Card, CardContent } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { useGeolocation, distanceMeters } from "@/hooks/useGeolocation";
 import type { Location } from "@/types/travel";
 import { useReviews } from "@/hooks/useReviews";
 import { placesApi } from "@/lib/api";
+import { ScrollArea } from "@/components/ui/scroll-area";
+
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface Props {
   place: Location | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   showDirections?: boolean;
-  onNavigate?: (place: Location) => void;
+  onNavigate?: (place: Location, action: "replace" | "add-side-trip") => void;
 }
 
 const HISTORY: Record<string, string> = {
@@ -41,13 +51,13 @@ const GOOGLE_REVIEWS: ExtReview[] = [
   { author: "Diego R.", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Diego", rating: 5, text: "Easy parking, friendly staff, beautiful setting. Highly recommend.", source: "TripAdvisor", timestamp: "2026-02-02T10:00:00Z" },
 ];
 
-// Mock gallery fallback
 function galleryFor(place: Location) {
   const seed = encodeURIComponent(place.name);
-  return [
-    { src: `https://picsum.photos/seed/${seed}-1/600/400`, by: "Google", source: "Imported" as "Imported" | "App user" },
-    { src: `https://picsum.photos/seed/${seed}-2/600/400`, by: "Unsplash", source: "Imported" as "Imported" | "App user" }
-  ];
+  return Array.from({ length: 6 }).map((_, i) => ({
+    src: `https://picsum.photos/seed/${seed}-${i}/600/400`,
+    by: i % 2 === 0 ? "Google Users" : "Unsplash",
+    source: "Imported" as "Imported" | "App user"
+  }));
 }
 
 type SortKey = "recent" | "rating-high" | "rating-low";
@@ -59,10 +69,20 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
   const [source, setSource] = useState<SourceFilter>("all");
   const [nearbyOnly, setNearbyOnly] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [showSideTripConfirm, setShowSideTripConfirm] = useState(false);
   const { fix } = useGeolocation();
 
   const [detailedPlace, setDetailedPlace] = useState<Location | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  
+  // Responsive sidebar vs bottom sheet
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   useEffect(() => {
     if (!open || !place) {
@@ -70,7 +90,6 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
       return;
     }
 
-    // Check if place object already has details populated (like rating or photo references)
     const isFullDetails = place.rating !== undefined && place.rating !== null && 
                           ((place.photo_references && place.photo_references.length > 0) || place.description);
 
@@ -79,14 +98,12 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
       return;
     }
 
-    // Check cache
     const cacheKey = place.id || `${place.name}_${place.lat}_${place.lng}`;
     if (placeDetailsCache[cacheKey]) {
       setDetailedPlace(placeDetailsCache[cacheKey]);
       return;
     }
 
-    // Fetch details from search API
     let mounted = true;
     async function fetchDetails() {
       setLoadingDetails(true);
@@ -117,14 +134,10 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
     }
 
     fetchDetails();
-
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [place, open]);
 
   const currentPlace = detailedPlace || place;
-
   const { reviews: fetchedReviews } = useReviews();
 
   const userReviews = useMemo(
@@ -132,7 +145,6 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
     [currentPlace, fetchedReviews],
   );
 
-  // Unified review list with source for filtering
   const allReviews = useMemo(() => {
     if (!currentPlace) return [];
     const app = userReviews.map((r: any) => ({
@@ -180,140 +192,158 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
     toast({ title: "🔗 Link Copied", description: currentPlace.name });
   };
 
+  const handleConfirmSideTrip = () => {
+    setShowSideTripConfirm(false);
+    if (onNavigate && currentPlace) {
+      onNavigate(currentPlace as Location, "add-side-trip");
+      onOpenChange(false);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[380px] rounded-2xl p-0 overflow-hidden max-h-[88dvh] flex flex-col">
-        <div className="h-28 bg-gradient-to-br from-primary/80 to-accent relative flex-shrink-0">
-          <div className="absolute inset-0 flex items-end p-4">
-            <div className="text-primary-foreground">
-              <Badge className="text-[9px] h-[16px] bg-white/20 backdrop-blur-sm border-0 capitalize mb-1">{((currentPlace?.type || place.type || "Place")).replace("-", " ")}</Badge>
-              <h2 className="font-display font-bold text-lg leading-tight">{currentPlace?.name || place.name}</h2>
+    <>
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent 
+          side={isMobile ? "bottom" : "left"} 
+          className={`p-0 overflow-hidden flex flex-col ${isMobile ? 'h-[90vh] w-full max-w-[100vw] rounded-t-3xl' : 'w-[400px] sm:max-w-md border-r'}`}
+        >
+          <ScrollArea className="flex-1 w-full relative">
+            {/* Hero Image Header */}
+            <div className="relative h-64 bg-zinc-900 group">
+              {gallery.length > 0 ? (
+                <img src={gallery[0].src} alt={currentPlace?.name || place.name} className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-br from-primary/80 to-accent" />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-5">
+                <Badge className="w-fit text-[10px] h-[20px] bg-white/20 backdrop-blur-md border-0 capitalize mb-2 text-white">
+                  {((currentPlace?.type || place.type || "Place")).replace("-", " ")}
+                </Badge>
+                <h2 className="font-display font-bold text-2xl md:text-3xl text-white leading-tight drop-shadow-lg">
+                  {currentPlace?.name || place.name}
+                </h2>
+              </div>
+              
+              <div className="absolute top-4 right-4 flex gap-2">
+                <Button size="icon" variant="secondary" className="h-8 w-8 rounded-full bg-black/40 backdrop-blur text-white hover:bg-black/60 border-0" onClick={handleShare}>
+                  <Share2 className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <DialogHeader className="px-4 pt-3 pb-2 flex-shrink-0">
-          <DialogTitle className="sr-only">{currentPlace?.name || place.name}</DialogTitle>
-          <DialogDescription className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-            <MapPin className="w-3 h-3" /> {currentPlace?.address || currentPlace?.description || place.address || place.description || "—"}
-          </DialogDescription>
-          <div className="flex items-center gap-2 mt-1.5">
-            <div className="flex items-center gap-0.5">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Star key={i} className={`w-3.5 h-3.5 ${i < Math.round(currentPlace?.rating ?? 0) ? "text-accent fill-accent" : "text-muted"}`} />
-              ))}
-            </div>
-            <span className="text-xs font-semibold">{currentPlace?.rating?.toFixed(1) ?? "—"}</span>
-            <span className="text-[10px] text-muted-foreground">· {allReviews.length} reviews · {gallery.length} photos</span>
-          </div>
-        </DialogHeader>
+            <div className="px-5 py-4 bg-background">
+              <SheetHeader className="mb-4 text-left">
+                <SheetTitle className="sr-only">{currentPlace?.name || place.name}</SheetTitle>
+                <div className="flex items-start justify-between gap-4">
+                  <SheetDescription className="text-sm text-foreground/80 flex items-start gap-2 flex-1">
+                    <MapPin className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
+                    {currentPlace?.address || currentPlace?.description || place.address || place.description || "Address not available"}
+                  </SheetDescription>
+                </div>
 
-        {loadingDetails ? (
-          <div className="flex-1 flex flex-col items-center justify-center py-20">
-            <Loader2 className="w-7 h-7 animate-spin text-primary mb-2" />
-            <span className="text-[11px] text-muted-foreground font-medium">Fetching place details...</span>
-          </div>
-        ) : (
-          <Tabs defaultValue="photos" className="flex-1 flex flex-col min-h-0">
-            <TabsList className="mx-4 h-9 p-1 rounded-xl bg-muted flex-shrink-0">
-              <TabsTrigger value="photos" className="flex-1 text-[11px] rounded-lg font-semibold gap-1"><Images className="w-3 h-3" /> Photos</TabsTrigger>
-              <TabsTrigger value="history" className="flex-1 text-[11px] rounded-lg font-semibold gap-1"><BookOpen className="w-3 h-3" /> History</TabsTrigger>
-              <TabsTrigger value="reviews" className="flex-1 text-[11px] rounded-lg font-semibold gap-1"><MessageSquare className="w-3 h-3" /> Reviews</TabsTrigger>
-            </TabsList>
+                <div className="flex items-center gap-2 mt-3 text-sm">
+                  <span className="font-bold text-foreground text-base">{currentPlace?.rating?.toFixed(1) ?? "—"}</span>
+                  <div className="flex items-center gap-0.5">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Star key={i} className={`w-4 h-4 ${i < Math.round(currentPlace?.rating ?? 0) ? "text-accent fill-accent" : "text-muted"}`} />
+                    ))}
+                  </div>
+                  <span className="text-muted-foreground ml-1">({allReviews.length})</span>
+                </div>
+              </SheetHeader>
 
-            <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
-              <TabsContent value="photos" className="mt-0 space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  {gallery.map((g, i) => (
-                    <div 
-                      key={i} 
-                      className="relative rounded-xl overflow-hidden bg-muted aspect-[4/3] cursor-pointer hover:opacity-90 transition-opacity"
-                      onClick={() => setSelectedPhotoIndex(i)}
-                    >
-                      <img src={g.src} alt={`${currentPlace?.name || place.name} photo ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
-                      <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between">
-                        <Badge className="text-[8px] h-[14px] bg-black/55 text-white border-0 gap-0.5">
-                          <Camera className="w-2 h-2" /> {g.by}
-                        </Badge>
-                        <Badge className={`text-[8px] h-[14px] border-0 ${g.source === "App user" ? "bg-primary/85 text-primary-foreground" : "bg-accent/85 text-accent-foreground"}`}>
-                          {g.source}
-                        </Badge>
-                      </div>
+              {showDirections && onNavigate && (
+                <div className="flex gap-2 mb-6">
+                  <Button className="flex-1 rounded-xl h-12 shadow-md gap-1.5 px-2 text-xs sm:text-sm" onClick={() => { onNavigate(currentPlace as Location, "replace"); onOpenChange(false); }}>
+                    <Navigation className="w-4 h-4 shrink-0" /> <span className="truncate">Get Directions</span>
+                  </Button>
+                  <Button className="flex-1 rounded-xl h-12 shadow-md gap-1.5 px-2 text-xs sm:text-sm bg-indigo-500 hover:bg-indigo-600 text-white" onClick={() => setShowSideTripConfirm(true)}>
+                    <Map className="w-4 h-4 shrink-0" /> <span className="truncate">Add Side Trip</span>
+                  </Button>
+                </div>
+              )}
+
+              {loadingDetails ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary mb-3" />
+                  <span className="text-sm text-muted-foreground font-medium">Loading places details...</span>
+                </div>
+              ) : (
+                <Tabs defaultValue="overview" className="w-full">
+                  <TabsList className="w-full h-auto min-h-[44px] p-1 rounded-xl bg-muted/60 flex flex-wrap sm:grid sm:grid-cols-3 mb-6">
+                    <TabsTrigger value="overview" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><BookOpen className="w-3.5 h-3.5" /> Overview</TabsTrigger>
+                    <TabsTrigger value="photos" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><Images className="w-3.5 h-3.5" /> Photos</TabsTrigger>
+                    <TabsTrigger value="reviews" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><MessageSquare className="w-3.5 h-3.5" /> Reviews</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="overview" className="mt-0 space-y-4">
+                    <div className="prose prose-sm dark:prose-invert">
+                      <p className="leading-relaxed">{history}</p>
                     </div>
-                  ))}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="history" className="mt-0 space-y-2">
-                <p className="text-xs leading-relaxed text-foreground/85">{history}</p>
-              </TabsContent>
-
-              <TabsContent value="reviews" className="mt-0 space-y-2">
-                {/* Filters */}
-                <div className="grid grid-cols-2 gap-2">
-                  <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-                    <SelectTrigger className="h-8 text-[11px]"><SelectValue placeholder="Sort" /></SelectTrigger>
-                    <SelectContent className="z-[80]">
-                      <SelectItem value="recent" className="text-xs">Most recent</SelectItem>
-                      <SelectItem value="rating-high" className="text-xs">Highest rated</SelectItem>
-                      <SelectItem value="rating-low" className="text-xs">Lowest rated</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={source} onValueChange={(v) => setSource(v as SourceFilter)}>
-                    <SelectTrigger className="h-8 text-[11px]"><SelectValue placeholder="Source" /></SelectTrigger>
-                    <SelectContent className="z-[80]">
-                      <SelectItem value="all" className="text-xs">All sources</SelectItem>
-                      <SelectItem value="app" className="text-xs">App users</SelectItem>
-                      <SelectItem value="google" className="text-xs">Google / Web</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <label className="flex items-center justify-between text-[11px] px-2 py-1.5 rounded-lg bg-muted">
-                  <span className="text-muted-foreground">Show nearby-user reviews only</span>
-                  <Switch checked={nearbyOnly} onCheckedChange={setNearbyOnly} />
-                </label>
-
-                {allReviews.length === 0 && (
-                  <p className="text-[11px] text-muted-foreground text-center py-6">No reviews match these filters.</p>
-                )}
-                {allReviews.map(r => (
-                  <Card key={r.id} className="border-0 card-interactive">
-                    <CardContent className="p-3">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <img src={r.avatar} className="w-7 h-7 rounded-lg" alt="" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[12px] font-semibold truncate">{r.author}</p>
-                          <div className="flex items-center gap-0.5">
-                            {Array.from({ length: 5 }).map((_, i) => (
-                              <Star key={i} className={`w-2.5 h-2.5 ${i < r.rating ? "text-accent fill-accent" : "text-muted"}`} />
-                            ))}
-                          </div>
+                    {gallery.length > 1 && (
+                      <div className="mt-6">
+                        <h4 className="font-semibold mb-3 text-sm flex items-center gap-2"><Images className="w-4 h-4 text-primary" /> Popular Photos</h4>
+                        <div className={`gap-3 pb-4 ${gallery.length >= 4 ? 'grid grid-cols-2' : 'flex overflow-x-auto snap-x pr-4'}`}>
+                          {gallery.slice(1, 4).map((g, i) => (
+                            <div 
+                              key={i} 
+                              className={`relative rounded-xl overflow-hidden bg-muted cursor-pointer hover:opacity-90 transition-opacity ${gallery.length >= 4 ? 'aspect-square' : 'w-40 h-28 shrink-0 snap-start'}`}
+                              onClick={() => setSelectedPhotoIndex(i + 1)}
+                            >
+                              <img src={g.src} alt={`Popular ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
+                            </div>
+                          ))}
                         </div>
-                        <Badge variant="outline" className="text-[9px] h-[16px] gap-0.5">
-                          {r.kind === "ext" ? <Globe className="w-2 h-2" /> : null}{r.source}
-                        </Badge>
                       </div>
-                      <p className="text-[11px] text-muted-foreground leading-relaxed">{r.text}</p>
-                      <p className="text-[9px] text-muted-foreground/70 mt-1">{new Date(r.timestamp).toLocaleDateString()}</p>
-                    </CardContent>
-                  </Card>
-                ))}
-              </TabsContent>
-            </div>
-          </Tabs>
-        )}
+                    )}
+                  </TabsContent>
 
-        <div className="p-3 border-t border-border/40 flex-shrink-0 flex gap-2">
-          {showDirections && onNavigate && currentPlace && (
-            <Button className="flex-1 h-10 rounded-xl font-semibold gap-1.5" onClick={() => { onNavigate(currentPlace); onOpenChange(false); }}>
-              <Navigation className="w-4 h-4" /> Get Directions
-            </Button>
-          )}
-          <Button variant="outline" className={`${showDirections ? "" : "flex-1"} h-10 rounded-xl font-semibold gap-1.5`} onClick={handleShare}>
-            <Share2 className="w-4 h-4" /> Share
-          </Button>
-        </div>
-      </DialogContent>
+                  <TabsContent value="photos" className="mt-0">
+                    <div className="grid grid-cols-2 gap-3 pb-8">
+                      {gallery.map((g, i) => (
+                        <div 
+                          key={i} 
+                          className="relative rounded-xl overflow-hidden bg-muted aspect-square cursor-pointer hover:opacity-90 transition-opacity"
+                          onClick={() => setSelectedPhotoIndex(i)}
+                        >
+                          <img src={g.src} alt={`Photo ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
+                        </div>
+                      ))}
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="reviews" className="mt-0 space-y-4 pb-8">
+                    {allReviews.length === 0 ? (
+                      <div className="text-center py-10 text-muted-foreground text-sm">No reviews found for this place.</div>
+                    ) : (
+                      allReviews.map(r => (
+                        <div key={r.id} className="p-4 rounded-2xl bg-muted/30 border border-border/50 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <img src={r.avatar} alt={r.author} className="w-10 h-10 rounded-full object-cover bg-muted" />
+                              <div>
+                                <p className="font-semibold text-sm leading-none">{r.author}</p>
+                                <div className="flex items-center gap-1 mt-1.5">
+                                  {Array.from({ length: 5 }).map((_, i) => (
+                                    <Star key={i} className={`w-3 h-3 ${i < r.rating ? "text-accent fill-accent" : "text-muted"}`} />
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground whitespace-nowrap bg-background px-2 py-1 rounded-md shadow-sm border">{r.source}</span>
+                          </div>
+                          <p className="text-sm text-foreground/90 leading-relaxed">{r.text}</p>
+                          <p className="text-[10px] text-muted-foreground font-medium">{new Date(r.timestamp).toLocaleDateString()}</p>
+                        </div>
+                      ))
+                    )}
+                  </TabsContent>
+                </Tabs>
+              )}
+            </div>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
 
       {/* Full screen photo viewer */}
       <Dialog open={selectedPhotoIndex !== null} onOpenChange={(open) => !open && setSelectedPhotoIndex(null)}>
@@ -334,6 +364,22 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
           )}
         </DialogContent>
       </Dialog>
-    </Dialog>
+
+      {/* Side Trip Confirmation Dialog */}
+      <AlertDialog open={showSideTripConfirm} onOpenChange={setShowSideTripConfirm}>
+        <AlertDialogContent className="w-[90vw] max-w-sm rounded-3xl p-6">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Add Side Trip?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will route you to <strong>{currentPlace?.name}</strong> first. After your visit, navigation will continue to your final destination.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-4 gap-2 flex-col sm:flex-row sm:space-x-0">
+            <AlertDialogCancel className="rounded-xl h-12 flex-1 mt-0">Cancel</AlertDialogCancel>
+            <AlertDialogAction className="rounded-xl h-12 flex-1 glow-primary" onClick={handleConfirmSideTrip}>Add Side Trip</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
