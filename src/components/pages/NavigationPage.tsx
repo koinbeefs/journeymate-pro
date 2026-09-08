@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Car, Bus, Footprints, Bike, ArrowRight, ArrowLeft, ArrowUp,
   CornerUpRight, CornerUpLeft, Flag, Gauge, Route, Locate,
-  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download, Map
+  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download, Map, X
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -88,6 +88,10 @@ function routeHasToll(coords: [number, number][] | undefined, mode: string) {
   return coords.some(([lat]) => lat < 14.45);
 }
 
+function isMapReady(map: L.Map | null): map is L.Map {
+  return !!(map && (map as any)._panes && (map as any)._loaded);
+}
+
 export default function NavigationPage() {
   const [selectedPlace, setSelectedPlace] = useState<Location | null>(null);
   const [selectedMode, setSelectedMode] = useState<"car" | "transit" | "walk" | "bike">("car");
@@ -129,11 +133,6 @@ export default function NavigationPage() {
 
   // Persist voice prefs
   useEffect(() => { saveVoicePrefs(voicePrefs); }, [voicePrefs]);
-  useEffect(() => {
-    const on = () => setIsOnline(true); const off = () => setIsOnline(false);
-    window.addEventListener("online", on); window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
-  }, []);
 
   // Real GPS
   const { fix } = useGeolocation();
@@ -143,6 +142,25 @@ export default function NavigationPage() {
   );
   const startPoint: [number, number] = userPos ?? [14.5895, 120.9740];
   const { speak, cancel: cancelVoice } = useVoiceGuide(voicePrefs);
+
+  useEffect(() => {
+    const on = () => {
+      setIsOnline(true);
+      // Reset locked start so live GPS syncs and route recalculates from real position
+      lockedStartRef.current = null;
+      if (isMapReady(mapInstance.current) && userPos) {
+        mapInstance.current.panTo(userPos, { animate: true });
+      }
+      toast({ title: "🌐 Connection Restored", description: "Synced route to current location." });
+    };
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, [userPos]);
 
   // Dynamic API places for near-route suggestions (restaurants, gas stations, viewpoints, hotels)
   const { places: routeRestaurants } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "restaurant" });
@@ -204,7 +222,7 @@ export default function NavigationPage() {
     }
   };
 
-  // Hand-off from Itinerary "Start the Trip"
+  // Hand-off from Itinerary "Start the Trip" or restore active navigation session on reload
   useEffect(() => {
     const trip = tripSession.takeTrip();
     if (trip && trip.stops.length > 0) {
@@ -225,7 +243,28 @@ export default function NavigationPage() {
       setTripMode(false);
       return;
     }
-    // No hand-off → if offline, restore the last cached route so navigation still works.
+
+    // Restore active session from localStorage if present (handles browser reloads during active navigation or dead zones)
+    try {
+      const activeRaw = window.localStorage.getItem("nav.activeSession");
+      if (activeRaw) {
+        const saved = JSON.parse(activeRaw);
+        if (saved.destination && (saved.isNavigating || saved.tripMode)) {
+          if (saved.startFrom) lockedStartRef.current = saved.startFrom;
+          setDestination(saved.destination);
+          if (saved.tripStops) setTripStops(saved.tripStops);
+          if (typeof saved.legIdx === "number") setLegIdx(saved.legIdx);
+          if (saved.isNavigating) setIsNavigating(saved.isNavigating);
+          if (saved.selectedMode) setSelectedMode(saved.selectedMode);
+          if (typeof saved.searchHidden === "boolean") setSearchHidden(saved.searchHidden);
+          if (typeof saved.tripMode === "boolean") setTripMode(saved.tripMode);
+          toast({ title: "🔄 Navigation Resumed", description: saved.destination.name });
+          return;
+        }
+      }
+    } catch {}
+
+    // No hand-off or session → if offline, restore the last cached route so navigation still works.
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       const cached = loadOfflineRoute();
       if (cached?.destination && cached.route) {
@@ -236,6 +275,29 @@ export default function NavigationPage() {
       }
     }
   }, []);
+
+  // Persist active navigation session to localStorage ONLY during active navigation or trips
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (destination && (isNavigating || tripMode)) {
+      try {
+        window.localStorage.setItem("nav.activeSession", JSON.stringify({
+          destination,
+          tripStops,
+          legIdx,
+          isNavigating,
+          selectedMode,
+          searchHidden,
+          tripMode,
+          startFrom: lockedStartRef.current
+        }));
+      } catch {}
+    } else {
+      try {
+        window.localStorage.removeItem("nav.activeSession");
+      } catch {}
+    }
+  }, [destination, tripStops, legIdx, isNavigating, selectedMode, searchHidden, tripMode]);
 
   // Cache route + alternates + nearby places for offline use.
   useEffect(() => {
@@ -279,16 +341,19 @@ export default function NavigationPage() {
     mapInstance.current = map;
     // User-initiated drag disables follow-mode so the map doesn't fight them
     map.on("dragstart", () => setFollowMode(false));
-    setTimeout(() => map.invalidateSize(), 100);
+    setTimeout(() => {
+      if (isMapReady(map)) map.invalidateSize();
+    }, 100);
     return () => {
-      map.remove();
+      try { map.remove(); } catch {}
+      mapInstance.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update map style when it changes
   useEffect(() => { 
-    if (tileRef.current) {
+    if (tileRef.current && isMapReady(mapInstance.current)) {
       tileRef.current.setUrl(tileUrls[mapStyle]); 
       // Update className dynamically (Leaflet doesn't have a direct method for this, so we manipulate the DOM element)
       const container = tileRef.current.getContainer();
@@ -304,7 +369,7 @@ export default function NavigationPage() {
 
   // Auto-center on user's location when it first becomes available
   useEffect(() => {
-    if (mapInstance.current && userPos && !route && !hasAutoCentered.current) {
+    if (isMapReady(mapInstance.current) && userPos && !route && !hasAutoCentered.current) {
       mapInstance.current.setView(userPos, 14);
       hasAutoCentered.current = true;
     }
@@ -312,7 +377,9 @@ export default function NavigationPage() {
 
   // When tilt mode flips, give Leaflet a beat to recompute its viewport.
   useEffect(() => {
-    const t = setTimeout(() => mapInstance.current?.invalidateSize(), 750);
+    const t = setTimeout(() => {
+      if (isMapReady(mapInstance.current)) mapInstance.current.invalidateSize();
+    }, 750);
     return () => clearTimeout(t);
   }, [isNavigating]);
 
@@ -327,7 +394,7 @@ export default function NavigationPage() {
   // Update start marker as GPS arrives
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map || !userPos) return;
+    if (!isMapReady(map) || !userPos) return;
     const accText = Math.round(fix?.accuracy ?? 0);
     const labelHtml = `
       <div role="img" aria-label="Your location, GPS signal ${reliability.label}${accText ? `, accurate within ${accText} meters` : ""}" style="position:relative;width:18px;height:18px;">
@@ -358,7 +425,7 @@ export default function NavigationPage() {
   // Update destination marker
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map) return;
+    if (!isMapReady(map)) return;
     destMarkerRef.current?.remove();
     secondaryDestMarkerRef.current?.remove();
 
@@ -444,7 +511,7 @@ export default function NavigationPage() {
   // Draw primary + alternate polylines + eateries along the way.
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map) return;
+    if (!isMapReady(map)) return;
     polylineRef.current?.remove();
     secondaryPolylineRef.current?.remove();
     traveledRef.current?.remove();
@@ -519,13 +586,13 @@ export default function NavigationPage() {
       const maxZoom = selectedMode === "walk" ? 17 : selectedMode === "bike" ? 16 : 15;
       map.fitBounds(bounds, { padding: [40, 40], maxZoom });
     }
-  }, [route, alternates, selectedAltIdx, tripMode, selectedMode, suggestionsAlongRoute]);
+  }, [route, secondaryRoute, alternates, selectedAltIdx, tripMode, selectedMode, suggestionsAlongRoute]);
 
   // Live GPS follow: snap user position to the route, advance steps, voice prompts
   useEffect(() => {
     if (!isNavigating || !route || !userPos) return;
     const map = mapInstance.current;
-    if (!map) return;
+    if (!isMapReady(map)) return;
 
     // Update car marker = user position (with heading-aware arrow)
     if (!carMarkerRef.current) {
@@ -840,11 +907,11 @@ export default function NavigationPage() {
           <motion.div
             key="dest-pill"
             initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="absolute top-4 left-4 z-30 w-full max-w-[280px]"
+            className="absolute top-4 left-4 z-30 w-full max-w-[280px] flex items-center gap-1.5"
           >
             <button
               onClick={() => setSearchHidden(false)}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-card/95 backdrop-blur-sm shadow-card-hover border border-border/50 text-left"
+              className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-card/95 backdrop-blur-sm shadow-card-hover border border-border/50 text-left hover:bg-muted/50 transition-colors"
             >
               <NavIcon className="w-4 h-4 text-primary flex-shrink-0" />
               <div className="flex-1 min-w-0">
@@ -854,6 +921,23 @@ export default function NavigationPage() {
               {tripStops.length > 0 && (
                 <Badge variant="outline" className="text-[9px] h-5">{legIdx + 1}/{tripStops.length}</Badge>
               )}
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                lockedStartRef.current = null;
+                setDestination(null);
+                setRoute(null);
+                setAlternates([]);
+                setIsNavigating(false);
+                setSearchHidden(false);
+                try { window.localStorage.removeItem("nav.activeSession"); } catch {}
+                toast({ title: "📍 Search Cleared", description: "Search for a new destination" });
+              }}
+              className="h-9 w-9 flex items-center justify-center rounded-xl bg-card/95 backdrop-blur-sm shadow-card-hover border border-border/50 text-muted-foreground hover:text-foreground hover:bg-destructive/10 transition-colors shrink-0"
+              title="Clear destination and search new place"
+            >
+              <X className="w-4 h-4" />
             </button>
           </motion.div>
         )}

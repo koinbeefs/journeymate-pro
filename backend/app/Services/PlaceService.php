@@ -415,27 +415,56 @@ class PlaceService
 
     public function autocomplete($query, $lat, $lng)
     {
-        // Use Geoapify Autocomplete API
-        $url = "https://api.geoapify.com/v1/geocode/autocomplete?text=" . urlencode($query) . "&filter=countrycode:ph&bias=proximity:{$lng},{$lat}&limit=5&apiKey={$this->geoapifyKey}";
+        // 1. Try Geoapify Autocomplete API first
+        $url = "https://api.geoapify.com/v1/geocode/autocomplete?text=" . urlencode($query) . "&filter=countrycode:ph&bias=proximity:{$lng},{$lat}&limit=8&apiKey={$this->geoapifyKey}";
         
         try {
             $response = Http::withoutVerifying()->get($url);
-            if ($response->failed()) return [];
-            
-            $features = $response->json()['features'] ?? [];
-            return array_map(function($f) {
-                $p = $f['properties'];
-                return [
-                    'id' => $p['place_id'] ?? uniqid(),
-                    'name' => $p['name'] ?? $p['formatted'], // Sometimes name is empty, use formatted
-                    'address' => $p['address_line2'] ?? $p['city'] ?? '',
-                    'lat' => $p['lat'],
-                    'lng' => $p['lon']
-                ];
-            }, $features);
+            if ($response->successful()) {
+                $features = $response->json()['features'] ?? [];
+                if (!empty($features)) {
+                    return array_map(function($f) {
+                        $p = $f['properties'];
+                        return [
+                            'id' => (string) ($p['place_id'] ?? uniqid()),
+                            'name' => $p['name'] ?? $p['formatted'] ?? 'Unknown Place',
+                            'address' => $p['address_line2'] ?? $p['city'] ?? $p['formatted'] ?? '',
+                            'lat' => (float) $p['lat'],
+                            'lng' => (float) $p['lon']
+                        ];
+                    }, $features);
+                }
+            }
         } catch (\Exception $e) {
-            return [];
+            Log::warning("Geoapify autocomplete failed: " . $e->getMessage());
         }
+
+        // 2. Fallback: Nominatim OpenStreetMap (Nationwide PH Search)
+        try {
+            $nomUrl = "https://nominatim.openstreetmap.org/search?q=" . urlencode($query) . "&format=json&countrycodes=ph&limit=8&addressdetails=1";
+            $response = Http::withHeaders([
+                'User-Agent' => 'Mozilla/5.0 (compatible; IntelliTravel/1.0; +http://localhost)'
+            ])->withoutVerifying()->get($nomUrl);
+
+            if ($response->successful()) {
+                $items = $response->json() ?? [];
+                return array_map(function($item) {
+                    $parts = explode(',', $item['display_name'] ?? '');
+                    $name = $item['name'] ?? trim($parts[0] ?? 'Unknown Place');
+                    return [
+                        'id' => (string) ($item['place_id'] ?? uniqid()),
+                        'name' => !empty($name) ? $name : ($parts[0] ?? 'Unknown Place'),
+                        'address' => $item['display_name'] ?? '',
+                        'lat' => (float) $item['lat'],
+                        'lng' => (float) $item['lon']
+                    ];
+                }, $items);
+            }
+        } catch (\Exception $e) {
+            Log::error("Nominatim fallback autocomplete failed: " . $e->getMessage());
+        }
+
+        return [];
     }
 
     public function getRecommended($lat, $lng, $userId)

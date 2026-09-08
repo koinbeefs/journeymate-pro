@@ -101,7 +101,7 @@ export const itinerariesApi = {
   rearrange: (tripId: string, lat: number, lng: number) => 
     api.post(`/trips/${tripId}/rearrange`, { lat, lng }),
   calculateGeneric: (data: { start_lat: number; start_lng: number; end_lat: number; end_lng: number; mode: string }) =>
-    api.post('/route/calculate', data),
+    api.get('/route/calculate', { params: data }),
   autoPlan: (tripId: string, preview: boolean = false) =>
     api.post(`/trips/${tripId}/auto-plan`, { preview }),
 };

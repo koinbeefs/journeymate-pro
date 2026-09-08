@@ -68,7 +68,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('itineraries/suggest-places', [ItineraryController::class, 'suggestPlaces']); // <--- MOVED UP
     Route::get('trips/{tripId}/itineraries', [ItineraryController::class, 'byTrip']);
     Route::post('trips/{tripId}/calculate-route', [ItineraryController::class, 'calculateRoute']);
-    Route::post('route/calculate', [ItineraryController::class, 'calculateGenericRoute']);
+    Route::match(['get', 'post'], 'route/calculate', [ItineraryController::class, 'calculateGenericRoute']);
     Route::get('trips/{tripId}/route-details', [ItineraryController::class, 'routeDetails']);
     Route::post('trips/{tripId}/rearrange', [ItineraryController::class, 'rearrange']);
     Route::post('trips/{tripId}/auto-plan', [ItineraryController::class, 'autoPlan']);

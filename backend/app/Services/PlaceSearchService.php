@@ -22,11 +22,11 @@ class PlaceSearchService
             'countrycodes' => 'ph',
         ];
 
-        // Bias towards location if provided
+        // Soft bias towards user location if provided
         if ($lat && $lng) {
-            $delta = 0.1; // Approx 10km
+            $delta = 0.5; // Approx 50km viewbox preference
             $params['viewbox'] = ($lng - $delta) . ',' . ($lat - $delta) . ',' . ($lng + $delta) . ',' . ($lat + $delta);
-            $params['bounded'] = 1;
+            // bounded = 0 (default): soft preference for nearby, but still returns nationwide matches
         }
 
         try {
