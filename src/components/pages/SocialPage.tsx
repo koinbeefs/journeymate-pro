@@ -4,7 +4,7 @@ import {
   Send, MapPin, Image, Users, Phone, Video,
   Circle, CheckCheck, Navigation, Share2,
   UserPlus, Crown, Eye, Radio, ChevronDown, ChevronUp,
-  Loader2
+  Loader2, ArrowLeft, MessageSquare, ChevronRight
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -237,6 +237,7 @@ export default function SocialPage() {
   const [trackOverlayOpen, setTrackOverlayOpen] = useState(true);
   const [inviting, setInviting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [openTripId, setOpenTripId] = useState<string | null>(null);
 
   const [trackingByTrip, setTrackingByTrip] = useState<Record<string, string[]>>(() => {
     const seed: Record<string, string[]> = {};
@@ -536,284 +537,376 @@ export default function SocialPage() {
 
   const roleIcons: Record<string, typeof Crown> = { owner: Crown, editor: Navigation, viewer: Eye };
 
-  // Return early or empty state if no trip exists
-  if (!activeTrip || !user) {
+  const handleOpenConversation = (tripId: string) => {
+    setActiveId(tripId);
+    setOpenTripId(tripId);
+  };
+
+  const handleCloseConversation = () => {
+    setOpenTripId(null);
+  };
+
+  if (!user) {
     return (
       <div className="flex flex-col h-full items-center justify-center text-muted-foreground p-6 text-center">
         <Users className="w-12 h-12 mb-4 opacity-20" />
-        <p className="font-semibold text-lg">No Active Trips</p>
-        <p className="text-sm">Create or join a trip to access the Social features.</p>
+        <p className="font-semibold text-lg">Sign In Required</p>
+        <p className="text-sm">Sign in to access Social features.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-5.8rem)]">
-      {/* Trip switcher — keeps each group chat isolated so multiple trips don't collide */}
-      <div className="px-4 pt-4 pb-2">
-        <Select value={activeTrip.id.toString()} onValueChange={setActiveId}>
-          <SelectTrigger className="h-10 rounded-xl bg-card border-border/50 text-xs font-semibold">
-            <div className="flex items-center gap-2 min-w-0">
-              <Users className="w-3.5 h-3.5 text-primary flex-shrink-0" />
-              <SelectValue />
-            </div>
-          </SelectTrigger>
-          <SelectContent>
-            {trips.map(t => (
-              <SelectItem key={t.id.toString()} value={t.id.toString()} className="text-xs">
-                {t.title} · {((t.collaborators?.length ?? 0) + (t.owner ? 1 : 0))} members
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <Tabs defaultValue="chat" className="flex flex-col flex-1 min-h-0">
-        <div className="px-4 pt-1">
-          <TabsList className="w-full h-10 p-1 rounded-xl bg-muted">
-            <TabsTrigger value="chat" className="flex-1 text-xs rounded-lg font-semibold data-[state=active]:shadow-sm">Chat</TabsTrigger>
-            <TabsTrigger value="members" className="flex-1 text-xs rounded-lg font-semibold data-[state=active]:shadow-sm">Members</TabsTrigger>
-            <TabsTrigger value="tracking" className="flex-1 text-xs rounded-lg font-semibold data-[state=active]:shadow-sm">Live Track</TabsTrigger>
-          </TabsList>
+    <>
+      {/* ═══ Conversation List (Inbox) ═══ */}
+      <div className="h-full overflow-y-auto">
+        <div className="px-4 pt-5 pb-3">
+          <h2 className="text-xl font-display font-bold tracking-tight">Messages</h2>
+          <p className="text-[11px] text-muted-foreground mt-0.5">Your trip group chats</p>
         </div>
 
-        <TabsContent value="chat" className="flex-1 hidden data-[state=active]:flex flex-col min-h-0 m-0 overflow-hidden">
-          {/* Chat header */}
-          <div className="px-4 py-2.5 flex items-center justify-between border-b border-border/30 flex-shrink-0">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="flex -space-x-1.5">
-                {tripMembers.filter(u => u.id !== user.id.toString()).slice(0, 3).map((u, i) => (
-                  <img key={i} src={u.avatar} className="w-7 h-7 rounded-lg border-2 border-card" />
-                ))}
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold truncate">{activeTrip.title}</p>
-                <p className="text-[10px] text-muted-foreground">{tripMembers.filter(c => c.isOnline).length} online · {tripMembers.length} members</p>
-              </div>
+        {trips.length === 0 ? (
+          <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+              <MessageSquare className="w-8 h-8 text-primary/40" />
             </div>
-            <div className="flex gap-0.5">
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => handleCall("audio")} disabled={!callPeer}><Phone className="w-4 h-4" /></Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => handleCall("video")} disabled={!callPeer}><Video className="w-4 h-4" /></Button>
-            </div>
+            <p className="font-semibold text-base">No Conversations</p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-[240px]">
+              Create or join a trip to start chatting with your travel group.
+            </p>
           </div>
+        ) : (
+          <div className="px-4 space-y-2 pb-6">
+            {trips.map(trip => {
+              const allMembers: TravelUser[] = [...(trip.collaborators || [])];
+              if (trip.owner && !allMembers.some(m => m.id === trip.owner!.id)) {
+                allMembers.unshift(trip.owner);
+              }
+              const onlineCount = allMembers.filter(m => m.isOnline).length;
+              const totalCount = allMembers.length;
+              const initials = trip.title.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+              const hash = trip.id.toString().split("").reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
+              const hue = (hash * 47) % 360;
 
-          {/* Messages — takes all remaining space */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3" style={{ minHeight: 0 }}>
-            {isLoading && messages.length === 0 ? (
-              <div className="flex justify-center items-center h-full">
-                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : messages.map(msg => {
-              const isMe = msg.userId === user.id.toString();
               return (
-                <motion.div
-                  key={msg.id}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`flex gap-2 ${isMe ? "flex-row-reverse" : ""}`}
+                <button
+                  key={trip.id}
+                  onClick={() => handleOpenConversation(trip.id.toString())}
+                  className="w-full text-left p-3.5 rounded-2xl bg-card border border-border/40 hover:border-primary/30 hover:shadow-md transition-all duration-200 flex items-center gap-3.5 group"
                 >
-                  {!isMe && <img src={msg.userAvatar} className="w-7 h-7 rounded-lg flex-shrink-0 mt-1" />}
-                  <div className={`max-w-[75%] ${isMe ? "items-end" : "items-start"}`}>
-                    {!isMe && <p className="text-[10px] text-muted-foreground mb-0.5 px-1 font-medium">{msg.userName}</p>}
-                    <div className={`overflow-hidden ${msg.type === "image" ? "p-0.5 rounded-2xl" : "px-3.5 py-2.5 text-[13px] leading-relaxed"} ${isMe
-                      ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-md"
-                      : msg.type === "location"
-                        ? "bg-info/10 border border-info/15 rounded-2xl rounded-tl-md"
-                        : msg.type === "itinerary-update"
-                          ? "bg-accent/10 border border-accent/15 rounded-2xl rounded-tl-md"
-                          : "bg-muted rounded-2xl rounded-tl-md"
-                      }`}>
-                      {msg.type === "location" && <MapPin className="w-3.5 h-3.5 text-info inline mr-1" />}
-                      {msg.type === "itinerary-update" && <Navigation className="w-3.5 h-3.5 text-accent inline mr-1" />}
-                      {msg.type === "image" ? (
-                        <img src={msg.message} alt="Shared photo" className="max-w-full rounded-xl max-h-[220px] object-cover" />
-                      ) : (
-                        msg.message
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-sm flex-shrink-0 shadow-sm"
+                    style={{ background: `linear-gradient(135deg, hsl(${hue}, 65%, 55%), hsl(${(hue + 30) % 360}, 65%, 45%))` }}
+                  >
+                    {initials}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold truncate">{trip.title}</p>
+                      {trip.startDate && (
+                        <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                          {new Date(trip.startDate).toLocaleDateString([], { month: "short", day: "numeric" })}
+                        </span>
                       )}
                     </div>
-                    <div className={`flex items-center gap-1 mt-0.5 px-1 ${isMe ? "justify-end" : ""}`}>
-                      <span className="text-[9px] text-muted-foreground">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                      {isMe && <CheckCheck className="w-3 h-3 text-info" />}
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </div>
-
-          {/* Input bar — naturally positioned at bottom of flex container */}
-          <div className="bg-card px-4 py-2.5 border-t border-border/30 flex-shrink-0">
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleImageChange}
-              accept="image/*"
-              className="hidden"
-            />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" className="h-9 w-9 flex-shrink-0 rounded-xl" onClick={sendImageMsg} disabled={sendApiMessage.isPending}><Image className="w-4 h-4" /></Button>
-              <Button
-                variant="ghost" size="icon"
-                className={`h-9 w-9 flex-shrink-0 rounded-xl ${shareLocation ? "text-primary bg-primary/8" : ""}`}
-                onClick={sendLocationMsg}
-                disabled={sendApiMessage.isPending}
-              >
-                <MapPin className="w-4 h-4" />
-              </Button>
-              <Input
-                value={message}
-                onChange={e => setMessage(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleSendMessage()}
-                placeholder="Type a message..."
-                className="h-10 text-sm border-0 bg-muted rounded-xl"
-              />
-              <Button size="icon" className="h-9 w-9 flex-shrink-0 rounded-xl" onClick={handleSendMessage} disabled={!message.trim()}>
-                <Send className="w-4 h-4" />
-              </Button>
-            </div>
-            {shareLocation && (
-              <p className="text-[9px] text-success mt-1.5 flex items-center gap-1 px-1 font-medium">
-                <Circle className="w-2 h-2 fill-success" /> Sharing live location
-              </p>
-            )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="members" className="flex-1 overflow-y-auto m-0 px-4 py-3">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="section-header">{activeTrip.title} · Members</h3>
-            <Button size="sm" className="h-8 text-xs gap-1.5 rounded-xl font-semibold" onClick={() => setInviteOpen(true)}>
-              <UserPlus className="w-3.5 h-3.5" /> Invite
-            </Button>
-          </div>
-          <div className="flex items-center gap-2 mb-2 text-[10px] text-muted-foreground font-medium">
-            <Radio className="w-3 h-3 text-primary" />
-            <span><span className="font-semibold text-primary">{trackingIds.length}</span> tracking now in this trip</span>
-          </div>
-          <div className="space-y-2">
-            {tripMembers.map(member => {
-              const RoleIcon = roleIcons[member.role] || Eye;
-              const tracking = isTracking(member.id);
-              return (
-                <Card key={member.id} className="border-0 card-interactive">
-                  <CardContent className="p-3.5 flex items-center gap-3">
-                    <div className="relative">
-                      <img src={member.avatar} className="w-11 h-11 rounded-xl" />
-                      {member.isOnline && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-success ring-2 ring-card" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-semibold truncate">{member.name} {member.id === user.id.toString() ? "(You)" : ""}</p>
-                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                        <RoleIcon className="w-3 h-3 text-muted-foreground" />
-                        <span className="text-[10px] text-muted-foreground capitalize font-medium">{member.role}</span>
-                        {tracking && (
-                          <Badge className="bg-primary/15 text-primary border-0 text-[9px] h-4 px-1.5 gap-1 font-semibold">
-                            <Radio className="w-2.5 h-2.5" /> Tracking
-                          </Badge>
-                        )}
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className="flex -space-x-1.5">
+                        {allMembers.slice(0, 3).map((m, i) => (
+                          <img key={i} src={m.avatar} alt="" className="w-4 h-4 rounded-full border border-card" />
+                        ))}
                       </div>
+                      <span className="text-[10px] text-muted-foreground">{totalCount} member{totalCount !== 1 ? "s" : ""}</span>
+                      {onlineCount > 0 && (
+                        <span className="flex items-center gap-1 text-[10px] text-success font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                          {onlineCount} online
+                        </span>
+                      )}
                     </div>
-                    <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => handleShareProfile(member.name)}><Share2 className="w-3.5 h-3.5" /></Button>
-                    </div>
-                  </CardContent>
-                </Card>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                      {trip.destination || "Tap to open chat"}
+                    </p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary transition-colors flex-shrink-0" />
+                </button>
               );
             })}
           </div>
-        </TabsContent>
+        )}
+      </div>
 
-        <TabsContent value="tracking" className="flex-1 m-0 flex flex-col min-h-0 overflow-hidden isolate">
-          <section
-            className="relative flex-[1_1_0%] min-h-[200px] max-h-[60vh] sm:max-h-[65vh] overflow-hidden isolate"
-            role="region"
-            aria-label={`Live tracking map for ${activeTrip.title}`}
+      {/* ═══ Chat Room (Full-Screen Overlay) ═══ */}
+      <AnimatePresence>
+        {openTripId && activeTrip && (
+          <motion.div
+            key="chat-room"
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", stiffness: 400, damping: 35 }}
+            className="fixed inset-0 z-[60] flex flex-col bg-background"
           >
-            <TrackingMap
-              key={activeTrip.id}
-              centerLat={activeTrip.centerLat}
-              centerLng={activeTrip.centerLng}
-              showHeatmap={showHeatmap}
-              members={tripMembers}
-              trackingTrails={{}}
-              heatmapData={heatmapData}
-            />
-
-            <div className="absolute top-3 right-3 z-[500] flex flex-col gap-2 items-end max-w-[calc(100%-1.5rem)]">
-              <Button
-                type="button"
-                size="sm"
-                variant={showHeatmap ? "default" : "secondary"}
-                onClick={() => setShowHeatmap(v => !v)}
-                aria-pressed={showHeatmap}
-                aria-label={showHeatmap ? "Hide activity heatmap" : "Show activity heatmap"}
-                className="min-h-11 px-3 rounded-xl text-[11px] font-semibold shadow-card-hover backdrop-blur-sm border border-border/50 bg-card/95"
-              >
-                {showHeatmap ? "Hide" : "Show"} Heatmap
+            {/* Chat Room Header */}
+            <div className="safe-top flex items-center gap-2.5 px-3 py-2.5 border-b border-border/30 bg-card/95 backdrop-blur-md flex-shrink-0">
+              <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl flex-shrink-0" onClick={handleCloseConversation}>
+                <ArrowLeft className="w-5 h-5" />
               </Button>
-              <Badge
-                className="bg-card/95 text-foreground border border-border/50 text-[10px] h-6 font-semibold gap-1 shadow-card-hover"
-                aria-live="polite"
-                aria-label={`${trackingIds.length} members currently tracking in this trip`}
-              >
-                <Radio className="w-2.5 h-2.5 text-primary" aria-hidden="true" /> {trackingIds.length} tracking
-              </Badge>
-            </div>
-          </section>
-
-          <Card
-            className="relative z-10 border-0 border-t border-border/40 rounded-none bg-card/98 backdrop-blur-md overflow-hidden flex-[0_0_auto] max-h-[45vh] flex flex-col"
-            style={{ paddingBottom: `env(safe-area-inset-bottom, 0px)` }}
-            role="region"
-            aria-label="Live tracking details"
-          >
-
-            <button
-              type="button"
-              onClick={() => setTrackOverlayOpen(v => !v)}
-              className="w-full flex items-center justify-between px-4 min-h-11 py-2 hover:bg-muted/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
-              aria-expanded={trackOverlayOpen}
-              aria-controls="live-track-details"
-              aria-label={trackOverlayOpen ? "Collapse live tracking details" : "Expand live tracking details"}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <Radio className="w-3.5 h-3.5 text-primary flex-shrink-0" aria-hidden="true" />
-                <p className="text-xs font-semibold truncate">Live · {activeTrip.title}</p>
-                <Badge variant="outline" className="text-[10px] h-5 font-semibold flex-shrink-0">
-                  {trackingIds.length} tracking
-                </Badge>
-              </div>
-              {trackOverlayOpen
-                ? <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden="true" />
-                : <ChevronUp className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden="true" />}
-            </button>
-            {trackOverlayOpen && (
-              <CardContent id="live-track-details" className="px-3 pb-3 pt-0 overflow-y-auto min-h-0">
-
-                <ul className="flex gap-2 overflow-x-auto -mx-1 px-1 pb-0.5 list-none" aria-label="Members currently tracking">
-                  {trackingIds.length === 0 && (
-                    <li className="text-[11px] text-muted-foreground py-1">No one is tracking in this trip right now.</li>
-                  )}
-                  {tripMembers.filter(u => isTracking(u.id)).map(u => (
-                    <li
-                      key={u.id}
-                      className="flex items-center gap-1.5 bg-muted rounded-xl px-2.5 py-1.5 flex-shrink-0"
-                      aria-label={`${u.name}${u.id === user.id.toString() ? " (you)" : ""} is sharing live location`}
-                    >
-                      <img src={u.avatar} alt="" className="w-5 h-5 rounded-lg" />
-                      <span className="text-[11px] font-semibold">{u.name.split(" ")[0]}{u.id === user.id.toString() ? " (You)" : ""}</span>
-                      <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" aria-hidden="true" />
-                    </li>
+              <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                <div className="flex -space-x-1.5">
+                  {tripMembers.filter(u => u.id !== user.id.toString()).slice(0, 3).map((u, i) => (
+                    <img key={i} src={u.avatar} alt={u.name} className="w-7 h-7 rounded-lg border-2 border-card" />
                   ))}
-                </ul>
-              </CardContent>
-            )}
-          </Card>
-        </TabsContent>
-      </Tabs>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold truncate">{activeTrip.title}</p>
+                  <p className="text-[10px] text-muted-foreground">{tripMembers.filter(c => c.isOnline).length} online · {tripMembers.length} members</p>
+                </div>
+              </div>
+              <div className="flex gap-0.5 flex-shrink-0">
+                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => handleCall("audio")} disabled={!callPeer}><Phone className="w-4 h-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => handleCall("video")} disabled={!callPeer}><Video className="w-4 h-4" /></Button>
+              </div>
+            </div>
 
+            {/* Tabs */}
+            <Tabs defaultValue="chat" className="flex flex-col flex-1 h-full min-h-0">
+              <div className="px-4 pt-1 flex-shrink-0">
+                <TabsList className="w-full h-10 p-1 rounded-xl bg-muted">
+                  <TabsTrigger value="chat" className="flex-1 text-xs rounded-lg font-semibold data-[state=active]:shadow-sm">Chat</TabsTrigger>
+                  <TabsTrigger value="members" className="flex-1 text-xs rounded-lg font-semibold data-[state=active]:shadow-sm">Members</TabsTrigger>
+                  <TabsTrigger value="tracking" className="flex-1 text-xs rounded-lg font-semibold data-[state=active]:shadow-sm">Live Track</TabsTrigger>
+                </TabsList>
+              </div>
+
+              {/* ── Chat Tab ── */}
+              <TabsContent value="chat" className="flex-1 h-full min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden data-[state=active]:flex data-[state=active]:flex-col">
+                {/* Messages */}
+                <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
+                  {isLoading && messages.length === 0 ? (
+                    <div className="flex justify-center items-center h-full">
+                      <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
+                      <MessageSquare className="w-10 h-10 mb-2 opacity-20" />
+                      <p className="text-xs font-medium">No messages yet</p>
+                      <p className="text-[10px] mt-0.5">Send the first message to your group!</p>
+                    </div>
+                  ) : (
+                    messages.map(msg => {
+                      const isMe = msg.userId === user.id.toString();
+                      return (
+                        <motion.div
+                          key={msg.id}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className={`flex gap-2 ${isMe ? "flex-row-reverse" : ""}`}
+                        >
+                          {!isMe && <img src={msg.userAvatar} alt={msg.userName} className="w-7 h-7 rounded-lg flex-shrink-0 mt-1" />}
+                          <div className={`max-w-[75%] ${isMe ? "items-end" : "items-start"}`}>
+                            {!isMe && <p className="text-[10px] text-muted-foreground mb-0.5 px-1 font-medium">{msg.userName}</p>}
+                            <div className={`overflow-hidden ${msg.type === "image" ? "p-0.5 rounded-2xl" : "px-3.5 py-2.5 text-[13px] leading-relaxed"} ${isMe
+                              ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-md"
+                              : msg.type === "location"
+                                ? "bg-info/10 border border-info/15 rounded-2xl rounded-tl-md"
+                                : msg.type === "itinerary-update"
+                                  ? "bg-accent/10 border border-accent/15 rounded-2xl rounded-tl-md"
+                                  : "bg-muted rounded-2xl rounded-tl-md"
+                              }`}>
+                              {msg.type === "location" && <MapPin className="w-3.5 h-3.5 text-info inline mr-1" />}
+                              {msg.type === "itinerary-update" && <Navigation className="w-3.5 h-3.5 text-accent inline mr-1" />}
+                              {msg.type === "image" ? (
+                                <img src={msg.message} alt="Shared photo" className="max-w-full rounded-xl max-h-[220px] object-cover" />
+                              ) : (
+                                msg.message
+                              )}
+                            </div>
+                            <div className={`flex items-center gap-1 mt-0.5 px-1 ${isMe ? "justify-end" : ""}`}>
+                              <span className="text-[9px] text-muted-foreground">
+                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                              {isMe && <CheckCheck className="w-3 h-3 text-info" />}
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Input Bar */}
+                <div className="safe-bottom bg-card px-4 py-2.5 border-t border-border/30 flex-shrink-0">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleImageChange}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" className="h-9 w-9 flex-shrink-0 rounded-xl" onClick={sendImageMsg} disabled={sendApiMessage.isPending}><Image className="w-4 h-4" /></Button>
+                    <Button
+                      variant="ghost" size="icon"
+                      className={`h-9 w-9 flex-shrink-0 rounded-xl ${shareLocation ? "text-primary bg-primary/8" : ""}`}
+                      onClick={sendLocationMsg}
+                      disabled={sendApiMessage.isPending}
+                    >
+                      <MapPin className="w-4 h-4" />
+                    </Button>
+                    <Input
+                      value={message}
+                      onChange={e => setMessage(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && handleSendMessage()}
+                      placeholder="Type a message..."
+                      className="h-10 text-sm border-0 bg-muted rounded-xl"
+                    />
+                    <Button size="icon" className="h-9 w-9 flex-shrink-0 rounded-xl" onClick={handleSendMessage} disabled={!message.trim()}>
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  {shareLocation && (
+                    <p className="text-[9px] text-success mt-1.5 flex items-center gap-1 px-1 font-medium">
+                      <Circle className="w-2 h-2 fill-success" /> Sharing live location
+                    </p>
+                  )}
+                </div>
+              </TabsContent>
+
+              {/* ── Members Tab ── */}
+              <TabsContent value="members" className="flex-1 h-full min-h-0 overflow-y-auto m-0 px-4 py-3 data-[state=inactive]:hidden data-[state=active]:block">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="section-header">{activeTrip.title} · Members</h3>
+                  <Button size="sm" className="h-8 text-xs gap-1.5 rounded-xl font-semibold" onClick={() => setInviteOpen(true)}>
+                    <UserPlus className="w-3.5 h-3.5" /> Invite
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2 mb-2 text-[10px] text-muted-foreground font-medium">
+                  <Radio className="w-3 h-3 text-primary" />
+                  <span><span className="font-semibold text-primary">{trackingIds.length}</span> tracking now in this trip</span>
+                </div>
+                <div className="space-y-2">
+                  {tripMembers.map(member => {
+                    const RoleIcon = roleIcons[member.role] || Eye;
+                    const tracking = isTracking(member.id);
+                    return (
+                      <Card key={member.id} className="border-0 card-interactive">
+                        <CardContent className="p-3.5 flex items-center gap-3">
+                          <div className="relative">
+                            <img src={member.avatar} className="w-11 h-11 rounded-xl" />
+                            {member.isOnline && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-success ring-2 ring-card" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[13px] font-semibold truncate">{member.name} {member.id === user.id.toString() ? "(You)" : ""}</p>
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                              <RoleIcon className="w-3 h-3 text-muted-foreground" />
+                              <span className="text-[10px] text-muted-foreground capitalize font-medium">{member.role}</span>
+                              {tracking && (
+                                <Badge className="bg-primary/15 text-primary border-0 text-[9px] h-4 px-1.5 gap-1 font-semibold">
+                                  <Radio className="w-2.5 h-2.5" /> Tracking
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => handleShareProfile(member.name)}><Share2 className="w-3.5 h-3.5" /></Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </TabsContent>
+
+              {/* ── Live Track Tab ── */}
+              <TabsContent value="tracking" className="flex-1 h-full min-h-0 m-0 overflow-hidden isolate data-[state=inactive]:hidden data-[state=active]:flex data-[state=active]:flex-col">
+                <section
+                  className="relative flex-1 min-h-0 w-full overflow-hidden isolate"
+                  role="region"
+                  aria-label={`Live tracking map for ${activeTrip.title}`}
+                >
+                  <TrackingMap
+                    key={activeTrip.id}
+                    centerLat={activeTrip.centerLat}
+                    centerLng={activeTrip.centerLng}
+                    showHeatmap={showHeatmap}
+                    members={tripMembers}
+                    trackingTrails={{}}
+                    heatmapData={heatmapData}
+                  />
+
+                  <div className="absolute top-3 right-3 z-[500] flex flex-col gap-2 items-end max-w-[calc(100%-1.5rem)]">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={showHeatmap ? "default" : "secondary"}
+                      onClick={() => setShowHeatmap(v => !v)}
+                      aria-pressed={showHeatmap}
+                      aria-label={showHeatmap ? "Hide activity heatmap" : "Show activity heatmap"}
+                      className="min-h-11 px-3 rounded-xl text-[11px] font-semibold shadow-card-hover backdrop-blur-sm border border-border/50 bg-card/95"
+                    >
+                      {showHeatmap ? "Hide" : "Show"} Heatmap
+                    </Button>
+                    <Badge
+                      className="bg-card/95 text-foreground border border-border/50 text-[10px] h-6 font-semibold gap-1 shadow-card-hover"
+                      aria-live="polite"
+                      aria-label={`${trackingIds.length} members currently tracking in this trip`}
+                    >
+                      <Radio className="w-2.5 h-2.5 text-primary" aria-hidden="true" /> {trackingIds.length} tracking
+                    </Badge>
+                  </div>
+                </section>
+
+                <Card
+                  className="relative z-10 border-0 border-t border-border/40 rounded-none bg-card/98 backdrop-blur-md overflow-hidden flex-[0_0_auto] max-h-[45vh] flex flex-col"
+                  style={{ paddingBottom: `env(safe-area-inset-bottom, 0px)` }}
+                  role="region"
+                  aria-label="Live tracking details"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setTrackOverlayOpen(v => !v)}
+                    className="w-full flex items-center justify-between px-4 min-h-11 py-2 hover:bg-muted/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                    aria-expanded={trackOverlayOpen}
+                    aria-controls="live-track-details"
+                    aria-label={trackOverlayOpen ? "Collapse live tracking details" : "Expand live tracking details"}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Radio className="w-3.5 h-3.5 text-primary flex-shrink-0" aria-hidden="true" />
+                      <p className="text-xs font-semibold truncate">Live · {activeTrip.title}</p>
+                      <Badge variant="outline" className="text-[10px] h-5 font-semibold flex-shrink-0">
+                        {trackingIds.length} tracking
+                      </Badge>
+                    </div>
+                    {trackOverlayOpen
+                      ? <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden="true" />
+                      : <ChevronUp className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden="true" />}
+                  </button>
+                  {trackOverlayOpen && (
+                    <CardContent id="live-track-details" className="px-3 pb-3 pt-0 overflow-y-auto min-h-0">
+                      <ul className="flex gap-2 overflow-x-auto -mx-1 px-1 pb-0.5 list-none" aria-label="Members currently tracking">
+                        {trackingIds.length === 0 && (
+                          <li className="text-[11px] text-muted-foreground py-1">No one is tracking in this trip right now.</li>
+                        )}
+                        {tripMembers.filter(u => isTracking(u.id)).map(u => (
+                          <li
+                            key={u.id}
+                            className="flex items-center gap-1.5 bg-muted rounded-xl px-2.5 py-1.5 flex-shrink-0"
+                            aria-label={`${u.name}${u.id === user.id.toString() ? " (you)" : ""} is sharing live location`}
+                          >
+                            <img src={u.avatar} alt="" className="w-5 h-5 rounded-lg" />
+                            <span className="text-[11px] font-semibold">{u.name.split(" ")[0]}{u.id === user.id.toString() ? " (You)" : ""}</span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" aria-hidden="true" />
+                          </li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  )}
+                </Card>
+              </TabsContent>
+            </Tabs>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Invite Dialog */}
       <Dialog open={inviteOpen} onOpenChange={(open) => {
@@ -906,6 +999,6 @@ export default function SocialPage() {
           />
         )}
       </AnimatePresence>
-    </div>
+    </>
   );
 }

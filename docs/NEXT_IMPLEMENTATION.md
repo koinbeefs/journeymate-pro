@@ -115,7 +115,7 @@ export interface ItineraryStop {
    - Add an `onAddWaypoint?: (viewpoint: any) => void` prop. When clicked, trigger this callback.
 2. **Proactive Suggestions During Navigation (`src/components/pages/NavigationPage.tsx`)**
    - While navigation is active ("in go"), monitor the user's current GPS location against the list of viewpoints along the route.
-   - If a viewpoint is approaching (e.g., within 5km) and is closely aligned with the current path, show a small unobtrusive popup/toast: "Scenic Viewpoint nearby: [Name]. Detour?"
+   - If a viewpoint is approaching (within 500m–1km radius) and is closely aligned with the current path, show a small unobtrusive popup/toast: "Scenic Viewpoint nearby: [Name]. Detour?"
 3. **Routing Logic & Confirmation Dialog**
    - When a user clicks a viewpoint (either from the panel or the proactive suggestion popup), show a **Confirmation Dialog**: "Do you want to add [Viewpoint] as a side trip?"
    - Upon confirmation, add the viewpoint to the `waypoints` state array.

@@ -34,9 +34,18 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (error?.response?.status === 401) {
       localStorage.removeItem('auth_token');
       // window.location.href = '/login'; // Optional: Redirect on 401
+    }
+    // Safeguard against third-party browser extension injection crashes (e.g., 200.js / M_ID)
+    if (
+      error?.message?.includes('M_ID') ||
+      error?.stack?.includes('200.js') ||
+      (error instanceof TypeError && String(error.stack).includes('200.js'))
+    ) {
+      console.warn('[API Interceptor] Handled browser extension error gracefully:', error.message);
+      return Promise.resolve({ data: [], status: 200, statusText: 'OK', headers: {}, config: error.config } as any);
     }
     return Promise.reject(error);
   }
@@ -100,7 +109,7 @@ export const itinerariesApi = {
     api.get(`/trips/${tripId}/route-details`),
   rearrange: (tripId: string, lat: number, lng: number) => 
     api.post(`/trips/${tripId}/rearrange`, { lat, lng }),
-  calculateGeneric: (data: { start_lat: number; start_lng: number; end_lat: number; end_lng: number; mode: string }) =>
+  calculateGeneric: (data: { start_lat: number; start_lng: number; end_lat: number; end_lng: number; mode: string; origin_name?: string; dest_name?: string }) =>
     api.get('/route/calculate', { params: data }),
   autoPlan: (tripId: string, preview: boolean = false) =>
     api.post(`/trips/${tripId}/auto-plan`, { preview }),
@@ -166,9 +175,9 @@ export const interactionsApi = {
 
 // Reviews API
 export const reviewsApi = {
-  getAll: (params?: { trip_id?: string }) =>
+  getAll: (params?: { trip_id?: string; place_name?: string; place_id?: string }) =>
     api.get('/reviews', { params }),
-  create: (data: { trip_id: string; place_name: string; rating: number; review_text?: string }) =>
+  create: (data: { trip_id?: string; place_id?: string; place_name: string; rating: number; review_text?: string; photos?: string[] }) =>
     api.post('/reviews', data),
   delete: (id: string) =>
     api.delete(`/reviews/${id}`),

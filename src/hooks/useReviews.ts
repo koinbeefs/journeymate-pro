@@ -1,26 +1,36 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { reviewsApi } from '@/lib/api';
 
-export function useReviews(tripId?: string) {
+export function useReviews(params?: string | { tripId?: string; placeName?: string; placeId?: string }) {
   const queryClient = useQueryClient();
 
+  const options = typeof params === 'string' ? { tripId: params } : (params || {});
+  const { tripId, placeName, placeId } = options;
+
   const reviewsQuery = useQuery({
-    queryKey: ['reviews', tripId],
+    queryKey: ['reviews', tripId, placeName, placeId],
     queryFn: async () => {
-      // If tripId is a mock (starts with 't'), just fetch all reviews without filtering by trip
       const validTripId = tripId && !tripId.startsWith('t') ? tripId : undefined;
-      const response = await reviewsApi.getAll(validTripId ? { trip_id: validTripId } : undefined);
+      const response = await reviewsApi.getAll({
+        ...(validTripId ? { trip_id: validTripId } : {}),
+        ...(placeName ? { place_name: placeName } : {}),
+        ...(placeId ? { place_id: placeId } : {}),
+      });
       return response.data.data || response.data || [];
     },
-    enabled: true, // We can fetch all reviews if tripId is not provided
+    enabled: true,
     placeholderData: keepPreviousData,
-    staleTime: 300_000,
+    staleTime: 0,
+    refetchOnMount: true,
   });
 
   const createReview = useMutation({
-    mutationFn: async (data: { trip_id: string; place_name: string; rating: number; review_text?: string }) => {
-      if (data.trip_id && data.trip_id.startsWith('t')) throw new Error("Cannot create a review for a mock trip");
-      const response = await reviewsApi.create(data);
+    mutationFn: async (data: { trip_id?: string; place_id?: string; place_name: string; rating: number; review_text?: string; photos?: string[] }) => {
+      const payload = { ...data };
+      if (payload.trip_id && payload.trip_id.startsWith('t')) {
+        delete payload.trip_id;
+      }
+      const response = await reviewsApi.create(payload);
       return response.data;
     },
     onSuccess: () => {

@@ -17,6 +17,16 @@ const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       gcTime: 1000 * 60 * 60 * 24 * 7, // 1 week gcTime
+      retry: (failureCount, error: any) => {
+        if (
+          error?.response?.status === 401 ||
+          error?.response?.status === 403 ||
+          error?.message?.includes("M_ID")
+        ) {
+          return false;
+        }
+        return failureCount < 2;
+      },
     },
   },
 });

@@ -2,7 +2,7 @@
 // (filterable by rating/recency/source/nearby), simulated Google reviews,
 // and an optional Get Directions / Add Side Trip button.
 import { useMemo, useState, useEffect } from "react";
-import { Star, Navigation, Share2, MapPin, BookOpen, MessageSquare, Globe, Images, Camera, Loader2, X, Map } from "lucide-react";
+import { Star, Navigation, Share2, MapPin, BookOpen, MessageSquare, Globe, Images, Camera, Loader2, X, Map, Upload, Plus } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -34,66 +34,75 @@ interface Props {
   onNavigate?: (place: Location, action: "replace" | "add-side-trip") => void;
 }
 
+export const placeDetailsCache: Record<string, Location> = {};
+
 const HISTORY: Record<string, string> = {
-  landmark: "This landmark has welcomed visitors for centuries. It played a key role during the Spanish colonial period and has been preserved as a national treasure since 1951.",
-  hotel: "Opened in the early 1900s, this property has hosted heads of state, artists and luminaries. The architecture blends Beaux-Arts elegance with tropical motifs.",
-  restaurant: "A modern reinterpretation of regional cuisine. The kitchen sources from a network of smallholder farms and changes its tasting menu seasonally.",
+  city: "A vibrant urban destination featuring a rich history, local markets, architectural landmarks, and diverse cultural experiences.",
+  poi: "A popular point of interest cherished by locals and visitors alike for its unique character and heritage.",
+  landmark: "An iconic landmark that has served as a cultural anchor and meeting point for generations.",
+  hotel: "A welcoming accommodation hub offering rest, local hospitality, and convenient access to nearby attractions.",
+  restaurant: "A beloved dining spot celebrated for local flavors, signature dishes, and authentic culinary traditions.",
+  "gas-station": "A essential transit stop providing fuel, conveniences, and refresh amenities along main highways.",
   viewpoint: "Formed by volcanic uplift, this ridge offers one of the most photographed panoramas in the country. Best visited near sunrise or just before sunset.",
-  city: "A bustling urban district with origins as a fishing village. Today it's known for art galleries, contemporary architecture, and a vibrant food scene.",
-  poi: "A favorite among locals and travelers alike, this spot has steadily grown in popularity over the past decade.",
-  "gas-station": "A 24-hour fuel & rest station along the expressway with restrooms, convenience store and a small food court.",
 };
 
-interface ExtReview { author: string; avatar: string; rating: number; text: string; source: "Google" | "TripAdvisor"; timestamp: string; }
-const GOOGLE_REVIEWS: ExtReview[] = [
-  { author: "Jordan M.", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Jordan", rating: 5, text: "Absolutely worth the trip. Staff were friendly and the views are unreal.", source: "Google", timestamp: "2026-05-21T10:00:00Z" },
-  { author: "Aria S.", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Aria", rating: 4, text: "Great experience overall, can get crowded on weekends — go early.", source: "Google", timestamp: "2026-04-12T10:00:00Z" },
-  { author: "Diego R.", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Diego", rating: 5, text: "Easy parking, friendly staff, beautiful setting. Highly recommend.", source: "TripAdvisor", timestamp: "2026-02-02T10:00:00Z" },
-];
+const TYPE_IMAGES: Record<string, string[]> = {
+  hotel: [
+    "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1582719508461-905c673771fd?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=800&q=80",
+  ],
+  restaurant: [
+    "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80",
+  ],
+  landmark: [
+    "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1564507592333-c60657eea523?auto=format&fit=crop&w=800&q=80",
+  ],
+  viewpoint: [
+    "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=800&q=80",
+  ],
+  default: [
+    "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80",
+  ]
+};
 
-function galleryFor(place: Location) {
-  const seed = encodeURIComponent(place.name);
-  return Array.from({ length: 6 }).map((_, i) => ({
-    src: `https://picsum.photos/seed/${seed}-${i}/600/400`,
-    by: i % 2 === 0 ? "Google Users" : "Unsplash",
-    source: "Imported" as "Imported" | "App user"
+function galleryFor(loc: Location | null): { src: string; by: string; source: "Imported" | "App user" }[] {
+  if (!loc) return [];
+  if (loc.imageUrl) return [{ src: loc.imageUrl, by: "Official", source: "Imported" }];
+  const type = loc.type || "default";
+  const urls = TYPE_IMAGES[type] || TYPE_IMAGES.default;
+  return urls.map((src, i) => ({
+    src,
+    by: i === 0 ? "Featured" : "Gallery",
+    source: "Imported" as const,
   }));
 }
 
-type SortKey = "recent" | "rating-high" | "rating-low";
-type SourceFilter = "all" | "app" | "google";
-export const placeDetailsCache: Record<string, Location> = {};
-
-export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = false, onNavigate }: Props) {
-  const [sort, setSort] = useState<SortKey>("recent");
-  const [source, setSource] = useState<SourceFilter>("all");
-  const [nearbyOnly, setNearbyOnly] = useState(false);
+export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, onNavigate }: Props) {
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [sort, setSort] = useState<"recent" | "rating-high" | "rating-low">("recent");
+  const [source, setSource] = useState<"all" | "app" | "google">("all");
+  const [nearbyOnly, setNearbyOnly] = useState(false);
   const [showSideTripConfirm, setShowSideTripConfirm] = useState(false);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [detailedPlace, setDetailedPlace] = useState<Location | null>(place);
+
+  const [showReviewForm, setShowReviewForm] = useState(false);
+  const [rating, setRating] = useState(5);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [reviewText, setReviewText] = useState("");
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [photoUrlInput, setPhotoUrlInput] = useState("");
+  const [showUrlInput, setShowUrlInput] = useState(false);
+
   const { fix } = useGeolocation();
 
-  const [detailedPlace, setDetailedPlace] = useState<Location | null>(null);
-  const [loadingDetails, setLoadingDetails] = useState(false);
-  
-  // Responsive sidebar vs bottom sheet
-  const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
-
-  useEffect(() => {
-    if (!open || !place) {
-      setDetailedPlace(null);
-      return;
-    }
-
-    const isFullDetails = place.rating !== undefined && place.rating !== null && 
-                          ((place.photo_references && place.photo_references.length > 0) || place.description);
-
-    if (isFullDetails) {
+    if (!place || !open) {
       setDetailedPlace(place);
       return;
     }
@@ -138,23 +147,59 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
   }, [place, open]);
 
   const currentPlace = detailedPlace || place;
-  const { reviews: fetchedReviews } = useReviews();
+  
+  const { reviews: fetchedReviews, createReview } = useReviews(
+    currentPlace ? { placeName: currentPlace.name, placeId: currentPlace.id } : undefined
+  );
 
   const userReviews = useMemo(
-    () => currentPlace ? fetchedReviews.filter((r: any) => r.locationId === currentPlace.id || r.place_name === currentPlace.name) : [],
+    () => currentPlace ? fetchedReviews.filter((r: any) => 
+      (r.place_id && r.place_id === currentPlace.id) || 
+      (r.place_name && r.place_name.toLowerCase() === currentPlace.name.toLowerCase()) ||
+      r.locationId === currentPlace.id
+    ) : [],
     [currentPlace, fetchedReviews],
   );
+
+  const userReviewPhotos = useMemo(() => {
+    const photosList: { src: string; by: string; source: "App user" }[] = [];
+    userReviews.forEach((r: any) => {
+      const author = r.user?.name || r.user?.username || r.userName || "App User";
+      if (Array.isArray(r.photos)) {
+        r.photos.forEach((photoUrl: string) => {
+          if (photoUrl) {
+            photosList.push({ src: photoUrl, by: author, source: "App user" });
+          }
+        });
+      }
+    });
+    return photosList;
+  }, [userReviews]);
 
   const allReviews = useMemo(() => {
     if (!currentPlace) return [];
     const app = userReviews.map((r: any) => ({
-      kind: "app" as const, id: r.id, author: r.user?.username || r.userName || "App User", avatar: r.user?.profile_pic || r.userAvatar || `https://ui-avatars.com/api/?name=${r.user?.username || "A"}`,
-      rating: r.rating, text: r.review_text || r.comment, source: "App" as const, timestamp: r.created_at || r.timestamp,
+      kind: "app" as const, 
+      id: r.id, 
+      author: r.user?.name || r.user?.username || r.userName || "Traveler", 
+      avatar: r.user?.profile_pic || r.userAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(r.user?.username || r.user?.name || "A")}`,
+      rating: r.rating, 
+      text: r.review_text || r.comment, 
+      photos: r.photos || [],
+      source: "App User" as const, 
+      timestamp: r.created_at || r.timestamp || new Date().toISOString(),
     }));
     const extReviews = currentPlace.reviews_data || [];
-    const ext = extReviews.map((r, i) => ({
-      kind: "ext" as const, id: `g-${i}`, author: r.author, avatar: r.avatar || `https://ui-avatars.com/api/?name=${r.author}`,
-      rating: r.rating, text: r.text, source: r.source, timestamp: r.timestamp,
+    const ext = extReviews.map((r: any, i: number) => ({
+      kind: "ext" as const, 
+      id: `g-${i}`, 
+      author: r.author, 
+      avatar: r.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(r.author || "G")}`,
+      rating: r.rating, 
+      text: r.text, 
+      photos: [],
+      source: r.source || "Google", 
+      timestamp: r.timestamp || new Date().toISOString(),
     }));
     let merged = [...app, ...ext];
     if (source === "app") merged = merged.filter(r => r.kind === "app");
@@ -170,15 +215,18 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
 
   const gallery = useMemo(() => {
     if (!currentPlace) return [];
+    let importedPhotos: { src: string; by: string; source: "Imported" | "App user" }[] = [];
     if (currentPlace.photo_references && currentPlace.photo_references.length > 0) {
-      return currentPlace.photo_references.map(ref => ({
+      importedPhotos = currentPlace.photo_references.map(ref => ({
         src: placesApi.getPhoto(ref),
         by: "Google",
-        source: "Imported" as "Imported" | "App user",
+        source: "Imported" as const,
       }));
+    } else {
+      importedPhotos = galleryFor(currentPlace);
     }
-    return galleryFor(currentPlace);
-  }, [currentPlace]);
+    return [...userReviewPhotos, ...importedPhotos];
+  }, [currentPlace, userReviewPhotos]);
 
   if (!place) return null;
   const history = (currentPlace as any)?.editorial_summary || 
@@ -187,7 +235,6 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
                   "No historical details available for this place yet.";
 
   const handleShare = () => {
-    if (!currentPlace) return;
     navigator.clipboard.writeText(`Check out ${currentPlace.name} on Intellitravel!`);
     toast({ title: "🔗 Link Copied", description: currentPlace.name });
   };
@@ -200,100 +247,149 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
     }
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach(file => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setPhotos(prev => [...prev, event.target!.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleAddPhotoUrl = () => {
+    if (!photoUrlInput.trim()) return;
+    setPhotos(prev => [...prev, photoUrlInput.trim()]);
+    setPhotoUrlInput("");
+    setShowUrlInput(false);
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    setPhotos(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmitReview = async () => {
+    if (!currentPlace) return;
+    if (!reviewText.trim() && photos.length === 0) {
+      toast({ title: "Write a review", description: "Please enter a comment or upload a photo.", variant: "destructive" });
+      return;
+    }
+    try {
+      await createReview.mutateAsync({
+        place_id: currentPlace.id,
+        place_name: currentPlace.name,
+        rating,
+        review_text: reviewText.trim(),
+        photos,
+      });
+      toast({ title: "🌟 Review Published!", description: `Thank you for reviewing ${currentPlace.name}.` });
+      setReviewText("");
+      setPhotos([]);
+      setRating(5);
+      setShowReviewForm(false);
+    } catch (err: any) {
+      toast({ title: "Failed to publish review", description: err?.message || "Something went wrong.", variant: "destructive" });
+    }
+  };
+
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent 
-          side={isMobile ? "bottom" : "left"} 
-          className={`p-0 overflow-hidden flex flex-col ${isMobile ? 'h-[90vh] w-full max-w-[100vw] rounded-t-3xl' : 'w-[400px] sm:max-w-md border-r'}`}
-        >
-          <ScrollArea className="flex-1 w-full relative">
-            {/* Hero Image Header */}
-            <div className="relative h-64 bg-zinc-900 group">
-              {gallery.length > 0 ? (
-                <img src={gallery[0].src} alt={currentPlace?.name || place.name} className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full bg-gradient-to-br from-primary/80 to-accent" />
-              )}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-5">
-                <Badge className="w-fit text-[10px] h-[20px] bg-white/20 backdrop-blur-md border-0 capitalize mb-2 text-white">
-                  {((currentPlace?.type || place.type || "Place")).replace("-", " ")}
-                </Badge>
-                <h2 className="font-display font-bold text-2xl md:text-3xl text-white leading-tight drop-shadow-lg">
-                  {currentPlace?.name || place.name}
-                </h2>
-              </div>
+        <SheetContent side="bottom" className="h-[85vh] max-h-[85vh] rounded-t-3xl p-0 overflow-hidden border-0">
+          <SheetHeader className="sr-only">
+            <SheetTitle>{currentPlace.name}</SheetTitle>
+            <SheetDescription>Details, photos, history, and community reviews for {currentPlace.name}</SheetDescription>
+          </SheetHeader>
+
+          <ScrollArea className="h-full">
+            <div className="relative h-48 sm:h-60 w-full bg-muted overflow-hidden">
+              <img
+                src={gallery[0]?.src || "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80"}
+                alt={currentPlace.name}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-background via-background/20 to-transparent" />
               
-              <div className="absolute top-4 right-4 flex gap-2">
-                <Button size="icon" variant="secondary" className="h-8 w-8 rounded-full bg-black/40 backdrop-blur text-white hover:bg-black/60 border-0" onClick={handleShare}>
+              <div className="absolute top-3 right-3 flex items-center gap-2">
+                <Button variant="secondary" size="icon" className="w-9 h-9 rounded-full bg-background/80 backdrop-blur-md" onClick={handleShare}>
                   <Share2 className="w-4 h-4" />
                 </Button>
+                <Button variant="secondary" size="icon" className="w-9 h-9 rounded-full bg-background/80 backdrop-blur-md" onClick={() => onOpenChange(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              <div className="absolute bottom-4 left-4 right-4 flex flex-col justify-end">
+                <Badge variant="outline" className="w-max mb-1.5 capitalize text-[10px] bg-background/80 backdrop-blur-md border-primary/20 text-primary">
+                  {currentPlace.type?.replace("-", " ") || "POI"}
+                </Badge>
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">{currentPlace.name}</h2>
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                  <MapPin className="w-3 h-3 flex-shrink-0 text-primary" />
+                  <span className="truncate">{currentPlace.address || "Tagaytay City, Cavite"}</span>
+                </p>
               </div>
             </div>
 
-            <div className="px-5 py-4 bg-background">
-              <SheetHeader className="mb-4 text-left">
-                <SheetTitle className="sr-only">{currentPlace?.name || place.name}</SheetTitle>
-                <div className="flex items-start justify-between gap-4">
-                  <SheetDescription className="text-sm text-foreground/80 flex items-start gap-2 flex-1">
-                    <MapPin className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
-                    {currentPlace?.address || currentPlace?.description || place.address || place.description || "Address not available"}
-                  </SheetDescription>
-                </div>
-
-                <div className="flex items-center gap-2 mt-3 text-sm">
-                  <span className="font-bold text-foreground text-base">{currentPlace?.rating?.toFixed(1) ?? "—"}</span>
-                  <div className="flex items-center gap-0.5">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <Star key={i} className={`w-4 h-4 ${i < Math.round(currentPlace?.rating ?? 0) ? "text-accent fill-accent" : "text-muted"}`} />
-                    ))}
+            <div className="p-4 space-y-5">
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-muted/40 border border-border/50">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 text-accent font-bold text-sm">
+                    <Star className="w-4 h-4 fill-accent" />
+                    <span>{currentPlace.rating ? Number(currentPlace.rating).toFixed(1) : "4.7"}</span>
                   </div>
-                  <span className="text-muted-foreground ml-1">({allReviews.length})</span>
+                  <span className="text-muted-foreground text-xs">({allReviews.length} reviews)</span>
                 </div>
-              </SheetHeader>
+                {fix && currentPlace.lat && currentPlace.lng && (
+                  <span className="text-xs text-muted-foreground font-medium">
+                    {(distanceMeters({ lat: fix.lat, lng: fix.lng }, { lat: currentPlace.lat, lng: currentPlace.lng }) / 1000).toFixed(1)} km away
+                  </span>
+                )}
+              </div>
 
               {showDirections && onNavigate && (
-                <div className="flex gap-2 mb-6">
-                  <Button className="flex-1 rounded-xl h-12 shadow-md gap-1.5 px-2 text-xs sm:text-sm" onClick={() => { onNavigate(currentPlace as Location, "replace"); onOpenChange(false); }}>
-                    <Navigation className="w-4 h-4 shrink-0" /> <span className="truncate">Get Directions</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button className="rounded-xl h-11 glow-primary gap-2 text-xs font-semibold" onClick={() => onNavigate(currentPlace as Location, "replace")}>
+                    <Navigation className="w-4 h-4" /> Get Directions
                   </Button>
-                  <Button className="flex-1 rounded-xl h-12 shadow-md gap-1.5 px-2 text-xs sm:text-sm bg-indigo-500 hover:bg-indigo-600 text-white" onClick={() => setShowSideTripConfirm(true)}>
-                    <Map className="w-4 h-4 shrink-0" /> <span className="truncate">Add Side Trip</span>
+                  <Button variant="outline" className="rounded-xl h-11 gap-2 text-xs font-semibold" onClick={() => setShowSideTripConfirm(true)}>
+                    <Map className="w-4 h-4 text-primary" /> Add Side Trip
                   </Button>
                 </div>
               )}
 
               {loadingDetails ? (
-                <div className="flex flex-col items-center justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-primary mb-3" />
-                  <span className="text-sm text-muted-foreground font-medium">Loading places details...</span>
+                <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground">
+                  <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                  <span className="text-xs">Fetching place information...</span>
                 </div>
               ) : (
                 <Tabs defaultValue="overview" className="w-full">
-                  <TabsList className="w-full h-auto min-h-[44px] p-1 rounded-xl bg-muted/60 flex flex-wrap sm:grid sm:grid-cols-3 mb-6">
+                  <TabsList className="w-full h-11 bg-muted/50 p-1 rounded-xl mb-4">
                     <TabsTrigger value="overview" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><BookOpen className="w-3.5 h-3.5" /> Overview</TabsTrigger>
-                    <TabsTrigger value="photos" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><Images className="w-3.5 h-3.5" /> Photos</TabsTrigger>
-                    <TabsTrigger value="reviews" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><MessageSquare className="w-3.5 h-3.5" /> Reviews</TabsTrigger>
+                    <TabsTrigger value="photos" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><Images className="w-3.5 h-3.5" /> Photos ({gallery.length})</TabsTrigger>
+                    <TabsTrigger value="reviews" className="flex-1 rounded-lg text-xs font-semibold gap-1.5 py-2"><MessageSquare className="w-3.5 h-3.5" /> Reviews ({allReviews.length})</TabsTrigger>
                   </TabsList>
 
-                  <TabsContent value="overview" className="mt-0 space-y-4">
-                    <div className="prose prose-sm dark:prose-invert">
-                      <p className="leading-relaxed">{history}</p>
+                  <TabsContent value="overview" className="space-y-4 mt-0">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
+                        <BookOpen className="w-3.5 h-3.5 text-primary" /> History & Context
+                      </h4>
+                      <p className="text-xs sm:text-sm text-foreground/90 leading-relaxed bg-muted/20 p-3 rounded-2xl border border-border/40">
+                        {history}
+                      </p>
                     </div>
-                    {gallery.length > 1 && (
-                      <div className="mt-6">
-                        <h4 className="font-semibold mb-3 text-sm flex items-center gap-2"><Images className="w-4 h-4 text-primary" /> Popular Photos</h4>
-                        <div className={`gap-3 pb-4 ${gallery.length >= 4 ? 'grid grid-cols-2' : 'flex overflow-x-auto snap-x pr-4'}`}>
-                          {gallery.slice(1, 4).map((g, i) => (
-                            <div 
-                              key={i} 
-                              className={`relative rounded-xl overflow-hidden bg-muted cursor-pointer hover:opacity-90 transition-opacity ${gallery.length >= 4 ? 'aspect-square' : 'w-40 h-28 shrink-0 snap-start'}`}
-                              onClick={() => setSelectedPhotoIndex(i + 1)}
-                            >
-                              <img src={g.src} alt={`Popular ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
-                            </div>
-                          ))}
-                        </div>
+
+                    {currentPlace.description && (
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">About</h4>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{currentPlace.description}</p>
                       </div>
                     )}
                   </TabsContent>
@@ -303,18 +399,142 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
                       {gallery.map((g, i) => (
                         <div 
                           key={i} 
-                          className="relative rounded-xl overflow-hidden bg-muted aspect-square cursor-pointer hover:opacity-90 transition-opacity"
+                          className="relative rounded-xl overflow-hidden bg-muted aspect-square cursor-pointer hover:opacity-90 transition-opacity border"
                           onClick={() => setSelectedPhotoIndex(i)}
                         >
                           <img src={g.src} alt={`Photo ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
+                          <span className="absolute bottom-1 left-1 text-[8px] bg-black/60 text-white px-1.5 py-0.5 rounded backdrop-blur-sm">
+                            {g.by}
+                          </span>
                         </div>
                       ))}
                     </div>
                   </TabsContent>
 
                   <TabsContent value="reviews" className="mt-0 space-y-4 pb-8">
+                    {!showReviewForm ? (
+                      <Button
+                        onClick={() => setShowReviewForm(true)}
+                        className="w-full rounded-2xl h-11 glow-primary gap-2 text-xs font-semibold"
+                      >
+                        <Plus className="w-4 h-4" /> Write a Review & Add Photos
+                      </Button>
+                    ) : (
+                      <div className="space-y-3 p-4 rounded-2xl bg-primary/5 border border-primary/20">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                            <Star className="w-4 h-4 text-accent fill-accent" /> Rate & Review {currentPlace.name}
+                          </span>
+                          <Button variant="ghost" size="sm" onClick={() => setShowReviewForm(false)} className="h-7 w-7 p-0 rounded-full">
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              type="button"
+                              onClick={() => setRating(star)}
+                              onMouseEnter={() => setHoverRating(star)}
+                              onMouseLeave={() => setHoverRating(0)}
+                              className="p-1 hover:scale-110 transition-transform"
+                            >
+                              <Star
+                                className={`w-6 h-6 ${
+                                  (hoverRating || rating) >= star
+                                    ? "text-accent fill-accent"
+                                    : "text-muted-foreground/30"
+                                }`}
+                              />
+                            </button>
+                          ))}
+                          <span className="text-xs font-semibold ml-2 text-muted-foreground">
+                            {rating === 5 ? "Excellent" : rating === 4 ? "Very Good" : rating === 3 ? "Average" : rating === 2 ? "Poor" : "Terrible"}
+                          </span>
+                        </div>
+
+                        <textarea
+                          value={reviewText}
+                          onChange={(e) => setReviewText(e.target.value)}
+                          placeholder="Share your experience, tips, or highlights of this place..."
+                          className="w-full text-xs p-3 rounded-xl border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none min-h-[75px]"
+                        />
+
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1">
+                              <Camera className="w-3.5 h-3.5" /> Attach Photos ({photos.length})
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <label className="cursor-pointer text-[10px] font-semibold text-primary hover:underline flex items-center gap-1 bg-background px-2.5 py-1 rounded-md border border-primary/20 shadow-sm">
+                                <Upload className="w-3 h-3" /> Upload Photo
+                                <input type="file" accept="image/*" multiple onChange={handleFileUpload} className="hidden" />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => setShowUrlInput(!showUrlInput)}
+                                className="text-[10px] font-semibold text-muted-foreground hover:underline bg-background px-2.5 py-1 rounded-md border shadow-sm"
+                              >
+                                + URL
+                              </button>
+                            </div>
+                          </div>
+
+                          {showUrlInput && (
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={photoUrlInput}
+                                onChange={(e) => setPhotoUrlInput(e.target.value)}
+                                placeholder="Paste image URL (https://...)"
+                                className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border bg-background"
+                              />
+                              <Button size="sm" onClick={handleAddPhotoUrl} className="text-xs h-8">Add</Button>
+                            </div>
+                          )}
+
+                          {photos.length > 0 && (
+                            <div className="flex items-center gap-2 overflow-x-auto py-1">
+                              {photos.map((p, i) => (
+                                <div key={i} className="relative w-16 h-16 rounded-lg overflow-hidden bg-muted flex-shrink-0 border">
+                                  <img src={p} alt={`Upload ${i + 1}`} className="w-full h-full object-cover" />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemovePhoto(i)}
+                                    className="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowReviewForm(false)}
+                            className="rounded-xl text-xs"
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={handleSubmitReview}
+                            disabled={createReview.isPending}
+                            className="rounded-xl text-xs glow-primary gap-1.5"
+                          >
+                            {createReview.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Post Review"}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
                     {allReviews.length === 0 ? (
-                      <div className="text-center py-10 text-muted-foreground text-sm">No reviews found for this place.</div>
+                      <div className="text-center py-10 text-muted-foreground text-sm">No reviews found for this place yet. Be the first to add a review!</div>
                     ) : (
                       allReviews.map(r => (
                         <div key={r.id} className="p-4 rounded-2xl bg-muted/30 border border-border/50 space-y-3">
@@ -332,7 +552,26 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
                             </div>
                             <span className="text-[10px] text-muted-foreground whitespace-nowrap bg-background px-2 py-1 rounded-md shadow-sm border">{r.source}</span>
                           </div>
-                          <p className="text-sm text-foreground/90 leading-relaxed">{r.text}</p>
+                          
+                          {r.text && <p className="text-sm text-foreground/90 leading-relaxed">{r.text}</p>}
+                          
+                          {r.photos && r.photos.length > 0 && (
+                            <div className="flex items-center gap-2 overflow-x-auto pt-1">
+                              {r.photos.map((photoUrl: string, idx: number) => (
+                                <img
+                                  key={idx}
+                                  src={photoUrl}
+                                  alt={`Review photo ${idx + 1}`}
+                                  className="w-20 h-20 rounded-xl object-cover border cursor-pointer hover:opacity-90 transition-opacity flex-shrink-0"
+                                  onClick={() => {
+                                    const galleryIdx = gallery.findIndex(g => g.src === photoUrl);
+                                    if (galleryIdx >= 0) setSelectedPhotoIndex(galleryIdx);
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          )}
+
                           <p className="text-[10px] text-muted-foreground font-medium">{new Date(r.timestamp).toLocaleDateString()}</p>
                         </div>
                       ))
@@ -345,7 +584,6 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections = 
         </SheetContent>
       </Sheet>
 
-      {/* Full screen photo viewer */}
       <Dialog open={selectedPhotoIndex !== null} onOpenChange={(open) => !open && setSelectedPhotoIndex(null)}>
         <DialogContent className="max-w-[95vw] w-full p-0 bg-transparent border-0 shadow-none flex items-center justify-center h-screen max-h-screen [&>button]:hidden">
           <DialogTitle className="sr-only">Photo view</DialogTitle>

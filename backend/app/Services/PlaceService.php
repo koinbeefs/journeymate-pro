@@ -48,14 +48,14 @@ class PlaceService
     {
         $places = $this->fetchFromRapidApi($lat, $lng, 'restaurant', 'prominence');
         if (empty($places)) {
-             return $this->searchGeoapifyCategory($lat, $lng, 'restaurant');
+            return $this->searchGeoapifyCategory($lat, $lng, 'restaurant');
         }
 
         // Filter > 4.0
         $filtered = array_filter($places, fn($p) => ($p['rating'] ?? 0) >= 4.0);
 
         // FIX: array_values() converts sparse array back to a list
-        return array_values($filtered); 
+        return array_values($filtered);
     }
 
     // --- INTERNAL HELPER METHODS ---
@@ -63,15 +63,15 @@ class PlaceService
     private function fetchFromRapidApi($lat, $lng, $type, $rankby)
     {
         // Round lat and lng to 3 decimal places (~111 meters) to cache for nearby locations
-        $cacheKey = "rapidapi_{$type}_" . round((float)$lat, 3) . "_" . round((float)$lng, 3);
-        
+        $cacheKey = "rapidapi_{$type}_" . round((float) $lat, 3) . "_" . round((float) $lng, 3);
+
         if (\Illuminate\Support\Facades\Cache::has($cacheKey)) {
             Log::info("Serving RapidAPI (v2) from cache for {$type} at {$lat},{$lng}");
             return \Illuminate\Support\Facades\Cache::get($cacheKey);
         }
 
         $url = 'https://google-map-places-new-v2.p.rapidapi.com/v1/places:searchNearby';
-        
+
         try {
             Log::info("Trying RapidAPI (v2) for {$type} at {$lat},{$lng}");
 
@@ -88,18 +88,18 @@ class PlaceService
                 'x-rapidapi-key' => $this->rapidApiKey,
                 'X-Goog-FieldMask' => 'places.id,places.displayName,places.location,places.formattedAddress,places.rating,places.userRatingCount,places.photos,places.reviews,places.types,places.editorialSummary'
             ])->withoutVerifying()->post($url, [
-                'includedTypes' => $includedTypes,
-                'maxResultCount' => 20,
-                'locationRestriction' => [
-                    'circle' => [
-                        'center' => [
-                            'latitude' => (float) $lat,
-                            'longitude' => (float) $lng
-                        ],
-                        'radius' => 5000.0
-                    ]
-                ]
-            ]);
+                        'includedTypes' => $includedTypes,
+                        'maxResultCount' => 20,
+                        'locationRestriction' => [
+                            'circle' => [
+                                'center' => [
+                                    'latitude' => (float) $lat,
+                                    'longitude' => (float) $lng
+                                ],
+                                'radius' => 10000.0
+                            ]
+                        ]
+                    ]);
 
             if ($response->failed()) {
                 Log::error("RapidAPI HTTP Error: " . $response->body());
@@ -107,7 +107,7 @@ class PlaceService
             }
 
             $places = $response->json()['places'] ?? [];
-            
+
             $results = array_map(function ($place) use ($type) {
                 // Safely access photos (up to 6)
                 $photoReferences = [];
@@ -116,7 +116,7 @@ class PlaceService
                         $photoReferences[] = $photo['name'];
                     }
                 }
-                
+
                 // Map reviews
                 $reviewsData = [];
                 if (isset($place['reviews']) && is_array($place['reviews'])) {
@@ -131,7 +131,7 @@ class PlaceService
                         ];
                     }
                 }
-                
+
                 // Infer type
                 $inferredType = 'poi';
                 $gTypes = $place['types'] ?? [];
@@ -144,7 +144,7 @@ class PlaceService
                 } elseif (array_intersect($gTypes, ['tourist_attraction', 'museum', 'historical_landmark', 'park', 'landmark'])) {
                     $inferredType = 'landmark';
                 }
-                
+
                 return [
                     'id' => $place['id'],
                     'name' => $place['displayName']['text'] ?? 'Unknown Place',
@@ -166,7 +166,7 @@ class PlaceService
 
             // Cache for 24 hours
             \Illuminate\Support\Facades\Cache::put($cacheKey, $results, now()->addHours(24));
-            
+
             return $results;
         } catch (\Exception $e) {
             Log::error("RapidAPI Exception: " . $e->getMessage());
@@ -209,10 +209,11 @@ class PlaceService
     private function searchGeoapifyText($lat, $lng, $query)
     {
         $url = "https://api.geoapify.com/v2/places?text=" . urlencode($query) . "&filter=circle:{$lng},{$lat},10000&limit=20&apiKey={$this->geoapifyKey}";
-        
+
         try {
             $response = Http::withoutVerifying()->get($url);
-            if ($response->failed()) return [];
+            if ($response->failed())
+                return [];
             return $this->formatGeoapify($response->json()['features'] ?? []);
         } catch (\Exception $e) {
             return [];
@@ -221,34 +222,34 @@ class PlaceService
 
     private function searchRapidApiText($lat, $lng, $query)
     {
-        $cacheKey = "rapidapi_search_" . md5(strtolower($query)) . "_" . round((float)$lat, 3) . "_" . round((float)$lng, 3);
-        
+        $cacheKey = "rapidapi_search_" . md5(strtolower($query)) . "_" . round((float) $lat, 3) . "_" . round((float) $lng, 3);
+
         if (\Illuminate\Support\Facades\Cache::has($cacheKey)) {
             Log::info("Serving RapidAPI (v2) text search from cache for query '{$query}'");
             return \Illuminate\Support\Facades\Cache::get($cacheKey);
         }
 
         $url = 'https://google-map-places-new-v2.p.rapidapi.com/v1/places:searchText';
-        
+
         try {
             Log::info("Trying RapidAPI (v2) text search for query '{$query}'");
-            
+
             $response = Http::withHeaders([
                 'x-rapidapi-host' => 'google-map-places-new-v2.p.rapidapi.com',
                 'x-rapidapi-key' => $this->rapidApiKey,
                 'X-Goog-FieldMask' => 'places.id,places.displayName,places.location,places.formattedAddress,places.rating,places.userRatingCount,places.photos,places.reviews,places.types,places.editorialSummary'
             ])->withoutVerifying()->post($url, [
-                'textQuery' => $query,
-                'locationBias' => [
-                    'circle' => [
-                        'center' => [
-                            'latitude' => (float) $lat,
-                            'longitude' => (float) $lng
-                        ],
-                        'radius' => 5000.0
-                    ]
-                ]
-            ]);
+                        'textQuery' => $query,
+                        'locationBias' => [
+                            'circle' => [
+                                'center' => [
+                                    'latitude' => (float) $lat,
+                                    'longitude' => (float) $lng
+                                ],
+                                'radius' => 1000.0
+                            ]
+                        ]
+                    ]);
 
             if ($response->failed()) {
                 Log::error("RapidAPI text search HTTP Error: " . $response->body());
@@ -256,7 +257,7 @@ class PlaceService
             }
 
             $places = $response->json()['places'] ?? [];
-            
+
             $results = array_map(function ($place) {
                 $photoReferences = [];
                 if (isset($place['photos']) && is_array($place['photos'])) {
@@ -264,7 +265,7 @@ class PlaceService
                         $photoReferences[] = $photo['name'];
                     }
                 }
-                
+
                 $reviewsData = [];
                 if (isset($place['reviews']) && is_array($place['reviews'])) {
                     foreach (array_slice($place['reviews'], 0, 5) as $rev) {
@@ -278,7 +279,7 @@ class PlaceService
                         ];
                     }
                 }
-                
+
                 // Infer type
                 $inferredType = 'poi';
                 $gTypes = $place['types'] ?? [];
@@ -291,7 +292,7 @@ class PlaceService
                 } elseif (array_intersect($gTypes, ['tourist_attraction', 'museum', 'historical_landmark', 'park', 'landmark'])) {
                     $inferredType = 'landmark';
                 }
-                
+
                 return [
                     'id' => $place['id'],
                     'name' => $place['displayName']['text'] ?? 'Unknown Place',
@@ -312,9 +313,9 @@ class PlaceService
             }, $places);
 
             \Illuminate\Support\Facades\Cache::put($cacheKey, $results, now()->addHours(24));
-            
+
             return $results;
-            
+
         } catch (\Exception $e) {
             Log::error("RapidAPI text search Exception: " . $e->getMessage());
             return [];
@@ -327,12 +328,17 @@ class PlaceService
             $props = $feature['properties'];
             $category = $props['categories'][0] ?? 'unknown';
             $type = 'poi';
-            if (str_starts_with($category, 'accommodation')) $type = 'hotel';
-            elseif (str_starts_with($category, 'catering')) $type = 'restaurant';
-            elseif (str_starts_with($category, 'commercial.gas')) $type = 'gas-station';
-            elseif (str_starts_with($category, 'tourism.sights')) $type = 'viewpoint';
-            elseif (str_starts_with($category, 'tourism')) $type = 'landmark';
-            
+            if (str_starts_with($category, 'accommodation'))
+                $type = 'hotel';
+            elseif (str_starts_with($category, 'catering'))
+                $type = 'restaurant';
+            elseif (str_starts_with($category, 'commercial.gas'))
+                $type = 'gas-station';
+            elseif (str_starts_with($category, 'tourism.sights'))
+                $type = 'viewpoint';
+            elseif (str_starts_with($category, 'tourism'))
+                $type = 'landmark';
+
             return [
                 'id' => $props['place_id'] ?? uniqid(),
                 'name' => $props['name'] ?? 'Unnamed Place',
@@ -352,17 +358,18 @@ class PlaceService
     public function reverseGeocode($lat, $lng)
     {
         $url = "https://api.geoapify.com/v1/geocode/reverse?lat={$lat}&lon={$lng}&apiKey={$this->geoapifyKey}";
-        
+
         try {
             $response = Http::withoutVerifying()->get($url);
-            if ($response->failed()) return "Unknown Location";
-            
+            if ($response->failed())
+                return "Unknown Location";
+
             $props = $response->json()['features'][0]['properties'] ?? [];
-            
+
             // Return City, Country (e.g., "Manila, Philippines")
             $city = $props['city'] ?? $props['town'] ?? $props['village'] ?? 'Unknown';
             $country = $props['country'] ?? '';
-            
+
             return "{$city}, {$country}";
         } catch (\Exception $e) {
             return "Unknown Location";
@@ -373,7 +380,7 @@ class PlaceService
     {
         // Cache the resolved URL (e.g. for 12 hours) to avoid hitting RapidAPI quota limits
         $cacheKey = "photo_uri_" . md5($photoReference);
-        
+
         if (\Illuminate\Support\Facades\Cache::has($cacheKey)) {
             Log::info("Serving photo URI from cache for reference: {$photoReference}");
             return redirect(\Illuminate\Support\Facades\Cache::get($cacheKey));
@@ -396,13 +403,13 @@ class PlaceService
             }
 
             $data = $response->json();
-            
+
             // The v2 endpoint with skipHttpRedirect=true returns a JSON with photoUri
             if (isset($data['photoUri'])) {
                 \Illuminate\Support\Facades\Cache::put($cacheKey, $data['photoUri'], now()->addHours(12));
                 return redirect($data['photoUri']);
             }
-            
+
             $seed = urlencode($photoReference);
             return redirect("https://picsum.photos/seed/{$seed}/400/300");
 
@@ -417,13 +424,13 @@ class PlaceService
     {
         // 1. Try Geoapify Autocomplete API first
         $url = "https://api.geoapify.com/v1/geocode/autocomplete?text=" . urlencode($query) . "&filter=countrycode:ph&bias=proximity:{$lng},{$lat}&limit=8&apiKey={$this->geoapifyKey}";
-        
+
         try {
             $response = Http::withoutVerifying()->get($url);
             if ($response->successful()) {
                 $features = $response->json()['features'] ?? [];
                 if (!empty($features)) {
-                    return array_map(function($f) {
+                    return array_map(function ($f) {
                         $p = $f['properties'];
                         return [
                             'id' => (string) ($p['place_id'] ?? uniqid()),
@@ -448,7 +455,7 @@ class PlaceService
 
             if ($response->successful()) {
                 $items = $response->json() ?? [];
-                return array_map(function($item) {
+                return array_map(function ($item) {
                     $parts = explode(',', $item['display_name'] ?? '');
                     $name = $item['name'] ?? trim($parts[0] ?? 'Unknown Place');
                     return [

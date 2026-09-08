@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Car, Bus, Footprints, Bike, ArrowRight, ArrowLeft, ArrowUp,
   CornerUpRight, CornerUpLeft, Flag, Gauge, Route, Locate,
-  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download, Map, X
+  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download, Map, X, Plus
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { fetchRoutePlan, formatDistance, formatDuration, RouteResult, RouteStep, RoutePlan } from "@/lib/routing";
 import { RouteDetailsPanel } from "@/components/travel/RouteDetailsPanel";
+import { TransitSegmentEditorModal } from "@/components/travel/TransitSegmentEditorModal";
 import { MapLayerSwitcher, type MapStyle } from "@/components/travel/MapLayerSwitcher";
 import { PlaceSearchInput } from "@/components/travel/PlaceSearchInput";
 import { useGeolocation, distanceMeters } from "@/hooks/useGeolocation";
@@ -24,7 +25,7 @@ import { VoiceSettingsPopover } from "@/components/travel/VoiceSettingsPopover";
 import { useWeather } from "@/hooks/useWeather";
 import { tripSession } from "@/lib/tripSession";
 import { saveOfflineRoute, loadOfflineRoute, saveTripOffline } from "@/lib/offlineRoute";
-import type { Location } from "@/types/travel";
+import type { Location, TransitSegment } from "@/types/travel";
 import { usePlaces } from "@/hooks/usePlaces";
 import { offlineTileLayer } from "@/lib/offlineMap";
 import { PlaceDetailsSheet } from "@/components/travel/PlaceDetailsSheet";
@@ -128,6 +129,7 @@ export default function NavigationPage() {
   });
   const [downloadingMap, setDownloadingMap] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [showTransitEditor, setShowTransitEditor] = useState(false);
 
   useEffect(() => { try { window.localStorage.setItem("nav.accuracyThreshold", String(accuracyThreshold)); } catch {} }, [accuracyThreshold]);
 
@@ -462,7 +464,7 @@ export default function NavigationPage() {
     setLoadingRoute(true);
     setRouteError(null);
 
-    fetchRoutePlan(frozenStart, [destination.lat, destination.lng], selectedMode)
+    fetchRoutePlan(frozenStart, [destination.lat, destination.lng], selectedMode, "Your Location", destination.name)
       .then(plan => {
         if (cancelled) return;
         // Only accept the result if it has real geometry (more than 2 coords = actual road route)
@@ -495,7 +497,7 @@ export default function NavigationPage() {
     let cancelled = false;
     if (tripStops.length > 1 && legIdx < tripStops.length - 1 && destination) {
       const nextDest = tripStops[legIdx + 1];
-      fetchRoutePlan([destination.lat, destination.lng], [nextDest.lat, nextDest.lng], selectedMode)
+      fetchRoutePlan([destination.lat, destination.lng], [nextDest.lat, nextDest.lng], selectedMode, destination.name, nextDest.name)
         .then(plan => {
           if (!cancelled) setSecondaryRoute(plan.primary);
         })
@@ -662,9 +664,10 @@ export default function NavigationPage() {
 
       const candidates = suggestionsAlongRoute.filter(l => {
         const loc = l as any;
-        return (loc.type === "restaurant" || loc.type === "viewpoint" || loc.category === "food") &&
-        l.id !== lastSuggestedPlaceRef.current &&
-        distanceMeters({ lat: pos[0], lng: pos[1] }, { lat: l.lat, lng: l.lng }) < 10000 // within 10km
+        const dist = distanceMeters({ lat: pos[0], lng: pos[1] }, { lat: l.lat, lng: l.lng });
+        return (loc.type === "restaurant" || loc.type === "viewpoint" || loc.type === "hotel" || loc.type === "gas-station" || loc.category === "food" || loc.category === "lodging") &&
+          l.id !== lastSuggestedPlaceRef.current &&
+          dist <= 1000; // 500m - 1km radius threshold
       });
       if (!candidates.length) return;
 
@@ -681,12 +684,15 @@ export default function NavigationPage() {
 
       lastSuggestedPlaceRef.current = nearest.id || nearest.name;
       const isViewpoint = nearest.type === "viewpoint";
-      const icon = isViewpoint ? "📸" : "🍽️";
-      const title = isViewpoint ? "Viewpoint Nearby" : "Eatery Ahead";
+      const isHotel = nearest.type === "hotel";
+      const icon = isViewpoint ? "📸" : isHotel ? "🏨" : "🍽️";
+      const title = isViewpoint ? "Viewpoint Nearby" : isHotel ? "Hotel Nearby" : "Eatery Ahead";
+
+      const distLabel = minDistance >= 1000 ? `${(minDistance / 1000).toFixed(1)}km` : `${Math.round(minDistance)}m`;
 
       toast({ 
         title: `${icon} ${title}`, 
-        description: `${nearest.name} is just ${(minDistance/1000).toFixed(1)}km away. ${nearest.rating ? nearest.rating + '★' : ''}` 
+        description: `${nearest.name} is ${distLabel} away. ${nearest.rating ? nearest.rating + '★' : ''}` 
       });
     }, 45000);
     return () => clearInterval(id);
@@ -1144,14 +1150,62 @@ export default function NavigationPage() {
                 </div>
               )}
 
+              {/* Commute Mode customization bar — active when mode is transit */}
+              {selectedMode === "transit" && destination && (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-primary/5 border border-primary/20 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🚌</span>
+                    <div>
+                      <p className="font-bold text-[11px] text-primary">Public Commute Mode</p>
+                      <p className="text-[9px] text-muted-foreground">
+                        {route?.transit_segments?.length 
+                          ? `${route.transit_segments.length} custom / GTFS transit legs` 
+                          : "Scheduled GTFS & local transit legs"}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowTransitEditor(true)}
+                    className="h-7 text-[10px] gap-1 font-semibold border-primary/30 text-primary hover:bg-primary/10"
+                  >
+                    <Plus className="w-3 h-3" /> Custom Legs
+                  </Button>
+                </div>
+              )}
+
               {destination && (
-                <RouteDetailsPanel routeCoords={route?.coordinates} mode={selectedMode} speedLimits={speedLimits} steps={route?.steps} onSelectPlace={setSelectedPlace} />
+                <RouteDetailsPanel routeCoords={route?.coordinates} mode={selectedMode} speedLimits={speedLimits} steps={route?.steps} transitSegments={route?.transit_segments} onSelectPlace={setSelectedPlace} />
               )}
 
             </motion.div>
           )}
         </AnimatePresence>
       </motion.div>
+
+      {/* Custom Transit Chain Modal for Commute mode in Navigation */}
+      {showTransitEditor && (
+        <TransitSegmentEditorModal
+          open={showTransitEditor}
+          onOpenChange={setShowTransitEditor}
+          stopName={destination?.name || "Commute Route"}
+          initialSegments={route?.transit_segments}
+          onSave={(segments) => {
+            if (route) {
+              const totalMins = segments.reduce((s, seg) => s + (seg.durationMinutes || 0), 0);
+              const updatedRoute: RouteResult = {
+                ...route,
+                duration: totalMins > 0 ? totalMins * 60 : route.duration,
+                transit_segments: segments,
+              };
+              setRoute(updatedRoute);
+            }
+            setShowTransitEditor(false);
+          }}
+        />
+      )}
 
       <PlaceDetailsSheet
         place={selectedPlace}

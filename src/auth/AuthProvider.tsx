@@ -61,16 +61,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
         })
         .catch((error: any) => {
-          console.error("getUser error:", error);
-          const errorMsg = (error.message || "Failed to load user profile") + ` (API: ${API_URL})`;
-          alert("Auth Fetch Failed! Please read this:\n\n" + errorMsg);
-          toast({
-            title: "Auth Fetch Failed",
-            description: errorMsg,
-            variant: "destructive",
-          });
+          console.warn("getUser auth check failed, falling back to local session:", error?.message);
           localStorage.removeItem('auth_token');
-          // If token is invalid, fallback to repo data or null
           setUser(repo.auth.get());
         })
         .finally(() => setReady(true));
