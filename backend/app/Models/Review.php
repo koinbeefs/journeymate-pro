@@ -10,13 +10,16 @@ class Review extends Model
         'user_id',
         'trip_id',
         'itinerary_id',
+        'place_id',
         'place_name',
         'rating',
         'review_text',
+        'photos',
     ];
 
     protected $casts = [
         'rating' => 'integer',
+        'photos' => 'array',
     ];
 
     public function user()

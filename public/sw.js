@@ -4,6 +4,7 @@ const SHELL_CACHE = `${VERSION}-shell`;
 const TILE_CACHE = `${VERSION}-tiles`;
 const OSRM_CACHE = `${VERSION}-osrm`;
 const GEO_CACHE = `${VERSION}-geo`;
+const API_CACHE = `${VERSION}-api`;
 const TILE_MAX = 500; // LRU cap
 const OSRM_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -51,7 +52,11 @@ function isTileRequest(url) {
 }
 
 function isRoutingRequest(url) {
-  return /router\.project-osrm\.org/.test(url.host);
+  return (
+    /router\.project-osrm\.org/.test(url.host) ||
+    /\/api\/route\/calculate/.test(url.pathname) ||
+    /\/api\/trips\/.*\/route-details/.test(url.pathname)
+  );
 }
 
 function isGeocodeRequest(url) {
@@ -96,30 +101,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // OSRM routes — cache-first with 24h TTL so trips reopen offline.
+  // Routing requests — network-first, fall back to OSRM_CACHE for offline use.
   if (isRoutingRequest(url)) {
     event.respondWith(
-      caches.open(OSRM_CACHE).then(async (cache) => {
-        const cached = await cache.match(req);
-        if (cached) {
-          const dateHeader = cached.headers.get("sw-cached-at");
-          const age = dateHeader ? Date.now() - Number(dateHeader) : Infinity;
-          if (age < OSRM_TTL_MS) return cached;
-        }
-        try {
-          const res = await fetch(req);
+      fetch(req)
+        .then((res) => {
           if (res && res.status === 200) {
-            const cloned = res.clone();
-            const body = await cloned.blob();
-            const headers = new Headers(cloned.headers);
-            headers.set("sw-cached-at", String(Date.now()));
-            cache.put(req, new Response(body, { status: 200, headers })).catch(() => { });
+            const copy = res.clone();
+            caches.open(OSRM_CACHE).then((c) => c.put(req, copy)).catch(() => { });
           }
           return res;
-        } catch {
-          return cached || Response.error();
-        }
-      })
+        })
+        .catch(() => caches.match(req))
     );
     return;
   }
@@ -140,7 +133,23 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Same-origin assets — stale-while-revalidate.
+  // Backend API calls (other than routing) — Network-first into API_CACHE (prevents polluting SHELL_CACHE)
+  if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(API_CACHE).then((c) => c.put(req, copy)).catch(() => { });
+          }
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  // Same-origin static assets — stale-while-revalidate.
   if (url.origin === location.origin) {
     event.respondWith(
       caches.match(req).then((cached) => {

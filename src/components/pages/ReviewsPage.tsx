@@ -69,7 +69,7 @@ function HeatmapMap({ data }: { data: any[] }) {
 export default function ReviewsPage() {
   const { active: trip } = useTrip();
   const { user } = useAuth();
-  const { reviews: apiReviews, createReview, isLoading } = useReviews(trip?.id?.toString());
+  const { reviews: apiReviews, createReview, isLoading } = useReviews();
   const [liveHeatmapData, setLiveHeatmapData] = useState<any[]>([]);
 
   useEffect(() => {
@@ -93,13 +93,13 @@ export default function ReviewsPage() {
     const mappedApiReviews = apiReviews.map((r: any) => ({
       id: r.id?.toString() || Math.random().toString(),
       userId: r.user_id?.toString(),
-      userName: r.user?.username || r.user?.name || "App User",
-      userAvatar: r.user?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${r.user_id}`,
+      userName: r.user?.name || r.user?.username || r.userName || "App User",
+      userAvatar: r.user?.profile_pic || r.userAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(r.user?.username || r.user?.name || "A")}`,
       locationId: r.place_id || "unknown",
       locationName: r.place_name || "Unknown Place",
       rating: r.rating || 5,
       comment: r.review_text || "",
-      images: [],
+      images: r.photos || [],
       timestamp: r.created_at || new Date().toISOString(),
       helpful: 0,
       source: "app" as const
@@ -287,7 +287,19 @@ export default function ReviewsPage() {
                             <Star key={i} className={`w-3 h-3 ${i < review.rating ? "text-accent fill-accent" : "text-muted"}`} />
                           ))}
                         </div>
-                        <p className="text-xs mt-2 leading-relaxed text-foreground/80">{review.comment}</p>
+                        {review.comment && <p className="text-xs mt-2 leading-relaxed text-foreground/80">{review.comment}</p>}
+                        {review.images && review.images.length > 0 && (
+                          <div className="flex items-center gap-2 overflow-x-auto mt-2">
+                            {review.images.map((imgUrl: string, idx: number) => (
+                              <img
+                                key={idx}
+                                src={imgUrl}
+                                alt={`Review photo ${idx + 1}`}
+                                className="w-16 h-16 rounded-xl object-cover border flex-shrink-0"
+                              />
+                            ))}
+                          </div>
+                        )}
                         <div className="flex items-center gap-3 mt-2.5">
                           <Button
                             variant="ghost" size="sm"

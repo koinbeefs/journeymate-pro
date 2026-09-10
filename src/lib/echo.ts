@@ -27,6 +27,10 @@ const echo = new Echo({
                     ? `${import.meta.env.VITE_API_URL || '/api'}/broadcasting/auth`
                     : `${window.location.origin}/api/broadcasting/auth`;
                 const token = localStorage.getItem('auth_token');
+                if (!token) {
+                    callback(true, new Error('Unauthenticated'));
+                    return;
+                }
 
                 fetch(authUrl, {
                     method: 'POST',
@@ -41,11 +45,17 @@ const echo = new Echo({
                         channel_name: channel.name
                     })
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) throw new Error(`Auth failed with status ${response.status}`);
+                    return response.json();
+                })
                 .then(data => {
                     callback(false, data);
                 })
                 .catch(error => {
+                    if (error?.message?.includes("M_ID") || String(error?.stack).includes("200.js")) {
+                        console.warn("[Echo] Suppressed third-party extension error during channel authorization:", error.message);
+                    }
                     callback(true, error);
                 });
             }

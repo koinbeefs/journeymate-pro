@@ -1,6 +1,8 @@
 // OSRM public demo routing — returns real street-level geometry + turn-by-turn steps.
 // Now supports alternatives per mode and returns a RoutePlan with labeled variants.
 
+import { TransitSegment } from "@/types/travel";
+
 export interface RouteStep {
   instruction: string;
   distance: number; // meters
@@ -19,6 +21,7 @@ export interface RouteResult {
   duration: number; // seconds
   steps: RouteStep[];
   label?: RouteLabel;
+  transit_segments?: TransitSegment[];
 }
 
 export interface RoutePlan {
@@ -53,7 +56,13 @@ function parseRoute(route: any): RouteResult {
     name: s.name || "",
     location: [s.maneuver.location[1], s.maneuver.location[0]],
   }));
-  return { coordinates, distance: route.distance, duration: route.duration, steps };
+  return { 
+    coordinates, 
+    distance: route.distance, 
+    duration: route.duration, 
+    steps,
+    transit_segments: route.transit_segments ?? undefined
+  };
 }
 
 import { itinerariesApi } from "@/lib/api";
@@ -66,11 +75,13 @@ const pendingRoutes = new Map<string, Promise<RoutePlan & { speed_limits?: any[]
 export async function fetchRoutePlan(
   start: [number, number],
   end: [number, number],
-  mode: Mode = "car"
+  mode: Mode = "car",
+  originName?: string,
+  destName?: string
 ): Promise<RoutePlan & { speed_limits?: any[] }> {
   // Build a cache key — round coords to 3dp (~111m) so micro-GPS drift doesn't
   // create a new request for effectively the same start position.
-  const key = `${start[0].toFixed(3)},${start[1].toFixed(3)}-${end[0].toFixed(3)},${end[1].toFixed(3)}-${mode}`;
+  const key = `${start[0].toFixed(3)},${start[1].toFixed(3)}-${end[0].toFixed(3)},${end[1].toFixed(3)}-${mode}-${originName || ""}-${destName || ""}`;
 
   // Return existing in-flight promise if one exists for this exact route+mode.
   const existing = pendingRoutes.get(key);
@@ -83,7 +94,9 @@ export async function fetchRoutePlan(
         start_lng: start[1],
         end_lat: end[0],
         end_lng: end[1],
-        mode
+        mode,
+        origin_name: originName,
+        dest_name: destName,
       });
 
       const data = res.data;
@@ -143,18 +156,21 @@ export async function fetchRoutePlan(
 export async function fetchRoute(
   start: [number, number],
   end: [number, number],
-  mode: Mode = "car"
+  mode: Mode = "car",
+  originName?: string,
+  destName?: string
 ): Promise<RouteResult> {
-  const plan = await fetchRoutePlan(start, end, mode);
+  const plan = await fetchRoutePlan(start, end, mode, originName, destName);
   return plan.primary;
 }
 
 function humanizeStep(s: any): string {
-  const type = s.maneuver.type;
-  const mod = s.maneuver.modifier;
+  const type = s.maneuver?.type;
+  const mod = s.maneuver?.modifier;
+  if (type === "transit" || (s.name && /^\d+\.\s/.test(s.name))) return s.name;
   const name = s.name ? ` onto ${s.name}` : "";
   if (type === "depart") return `Head ${mod || "out"}${name}`;
-  if (type === "arrive") return `Arrive at destination`;
+  if (type === "arrive") return s.name || `Arrive at destination`;
   if (type === "turn") return `Turn ${mod}${name}`;
   if (type === "merge") return `Merge ${mod || ""}${name}`.trim();
   if (type === "roundabout") return `Take the roundabout${name}`;

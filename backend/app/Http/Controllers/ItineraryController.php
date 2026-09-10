@@ -274,7 +274,9 @@ class ItineraryController extends Controller
             'start_lng' => 'required|numeric',
             'end_lat' => 'required|numeric',
             'end_lng' => 'required|numeric',
-            'mode' => 'nullable|string'
+            'mode' => 'nullable|string',
+            'origin_name' => 'nullable|string',
+            'dest_name' => 'nullable|string',
         ]);
 
         $waypoints = [
@@ -284,9 +286,11 @@ class ItineraryController extends Controller
 
         $routeService = new RouteService();
         $mode = $request->mode ?? 'car';
+        $originName = $request->input('origin_name', 'Your Starting Location');
+        $destName = $request->input('dest_name', 'Destination');
 
         try {
-            $route = $routeService->calculateRoute($waypoints, $mode);
+            $route = $routeService->calculateRoute($waypoints, $mode, true, $originName, $destName);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Generic Route Calc Failed: " . $e->getMessage());
             return response()->json(['error' => 'Route service unavailable'], 500);

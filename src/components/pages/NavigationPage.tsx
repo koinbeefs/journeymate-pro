@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Car, Bus, Footprints, Bike, ArrowRight, ArrowLeft, ArrowUp,
   CornerUpRight, CornerUpLeft, Flag, Gauge, Route, Locate,
-  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download,
+  UtensilsCrossed, CloudSun, Navigation as NavIcon, Loader2, Lock, Unlock, Box, Signal, RotateCcw, Download, Map, X, Plus
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { fetchRoutePlan, formatDistance, formatDuration, RouteResult, RouteStep, RoutePlan } from "@/lib/routing";
 import { RouteDetailsPanel } from "@/components/travel/RouteDetailsPanel";
+import { TransitSegmentEditorModal } from "@/components/travel/TransitSegmentEditorModal";
 import { MapLayerSwitcher, type MapStyle } from "@/components/travel/MapLayerSwitcher";
 import { PlaceSearchInput } from "@/components/travel/PlaceSearchInput";
 import { useGeolocation, distanceMeters } from "@/hooks/useGeolocation";
@@ -24,9 +25,10 @@ import { VoiceSettingsPopover } from "@/components/travel/VoiceSettingsPopover";
 import { useWeather } from "@/hooks/useWeather";
 import { tripSession } from "@/lib/tripSession";
 import { saveOfflineRoute, loadOfflineRoute, saveTripOffline } from "@/lib/offlineRoute";
-import type { Location } from "@/types/travel";
+import type { Location, TransitSegment } from "@/types/travel";
 import { usePlaces } from "@/hooks/usePlaces";
 import { offlineTileLayer } from "@/lib/offlineMap";
+import { PlaceDetailsSheet } from "@/components/travel/PlaceDetailsSheet";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -87,13 +89,19 @@ function routeHasToll(coords: [number, number][] | undefined, mode: string) {
   return coords.some(([lat]) => lat < 14.45);
 }
 
+function isMapReady(map: L.Map | null): map is L.Map {
+  return !!(map && (map as any)._panes && (map as any)._loaded);
+}
+
 export default function NavigationPage() {
+  const [selectedPlace, setSelectedPlace] = useState<Location | null>(null);
   const [selectedMode, setSelectedMode] = useState<"car" | "transit" | "walk" | "bike">("car");
   const [isNavigating, setIsNavigating] = useState(false);
   const [voicePrefs, setVoicePrefs] = useState<VoicePrefs>(() => loadVoicePrefs());
   const [sheetExpanded, setSheetExpanded] = useState(true);
   const [mapStyle, setMapStyle] = useState<MapStyle>("voyager");
   const [route, setRoute] = useState<RouteResult | null>(null);
+  const [secondaryRoute, setSecondaryRoute] = useState<RouteResult | null>(null);
   const [alternates, setAlternates] = useState<RouteResult[]>([]);
   const [speedLimits, setSpeedLimits] = useState<any[]>([]);
   const [selectedAltIdx, setSelectedAltIdx] = useState<number>(0); // 0 = primary
@@ -121,16 +129,12 @@ export default function NavigationPage() {
   });
   const [downloadingMap, setDownloadingMap] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [showTransitEditor, setShowTransitEditor] = useState(false);
 
   useEffect(() => { try { window.localStorage.setItem("nav.accuracyThreshold", String(accuracyThreshold)); } catch {} }, [accuracyThreshold]);
 
   // Persist voice prefs
   useEffect(() => { saveVoicePrefs(voicePrefs); }, [voicePrefs]);
-  useEffect(() => {
-    const on = () => setIsOnline(true); const off = () => setIsOnline(false);
-    window.addEventListener("online", on); window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
-  }, []);
 
   // Real GPS
   const { fix } = useGeolocation();
@@ -141,13 +145,34 @@ export default function NavigationPage() {
   const startPoint: [number, number] = userPos ?? [14.5895, 120.9740];
   const { speak, cancel: cancelVoice } = useVoiceGuide(voicePrefs);
 
-  // Dynamic API places for near-route suggestions (restaurants + gas stations)
+  useEffect(() => {
+    const on = () => {
+      setIsOnline(true);
+      // Reset locked start so live GPS syncs and route recalculates from real position
+      lockedStartRef.current = null;
+      if (isMapReady(mapInstance.current) && userPos) {
+        mapInstance.current.panTo(userPos, { animate: true });
+      }
+      toast({ title: "🌐 Connection Restored", description: "Synced route to current location." });
+    };
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, [userPos]);
+
+  // Dynamic API places for near-route suggestions (restaurants, gas stations, viewpoints, hotels)
   const { places: routeRestaurants } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "restaurant" });
   const { places: routeGasStations } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "gas-station" });
+  const { places: routeViewpoints } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "viewpoint" });
+  const { places: routeHotels } = usePlaces({ lat: startPoint[0], lng: startPoint[1], category: "hotel" });
 
   const suggestionsAlongRoute = useMemo(() => {
-    return [...routeRestaurants, ...routeGasStations];
-  }, [routeRestaurants, routeGasStations]);
+    return [...routeRestaurants, ...routeGasStations, ...routeViewpoints, ...routeHotels];
+  }, [routeRestaurants, routeGasStations, routeViewpoints, routeHotels]);
 
   // Weather along route (sampled at midpoint of current leg).
   const midCoord = route?.coordinates?.[Math.floor(route.coordinates.length / 2)];
@@ -156,11 +181,13 @@ export default function NavigationPage() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const secondaryPolylineRef = useRef<L.Polyline | null>(null);
   const altPolylinesRef = useRef<L.Polyline[]>([]);
   const traveledRef = useRef<L.Polyline | null>(null);
   const carMarkerRef = useRef<L.Marker | null>(null);
   const tileRef = useRef<L.TileLayer | null>(null);
   const destMarkerRef = useRef<L.Marker | null>(null);
+  const secondaryDestMarkerRef = useRef<L.Marker | null>(null);
   const startMarkerRef = useRef<L.Marker | null>(null);
   const eateryMarkersRef = useRef<L.Marker[]>([]);
   const accuracyRingRef = useRef<L.Circle | null>(null);
@@ -197,7 +224,7 @@ export default function NavigationPage() {
     }
   };
 
-  // Hand-off from Itinerary "Start the Trip"
+  // Hand-off from Itinerary "Start the Trip" or restore active navigation session on reload
   useEffect(() => {
     const trip = tripSession.takeTrip();
     if (trip && trip.stops.length > 0) {
@@ -218,7 +245,28 @@ export default function NavigationPage() {
       setTripMode(false);
       return;
     }
-    // No hand-off → if offline, restore the last cached route so navigation still works.
+
+    // Restore active session from localStorage if present (handles browser reloads during active navigation or dead zones)
+    try {
+      const activeRaw = window.localStorage.getItem("nav.activeSession");
+      if (activeRaw) {
+        const saved = JSON.parse(activeRaw);
+        if (saved.destination && (saved.isNavigating || saved.tripMode)) {
+          if (saved.startFrom) lockedStartRef.current = saved.startFrom;
+          setDestination(saved.destination);
+          if (saved.tripStops) setTripStops(saved.tripStops);
+          if (typeof saved.legIdx === "number") setLegIdx(saved.legIdx);
+          if (saved.isNavigating) setIsNavigating(saved.isNavigating);
+          if (saved.selectedMode) setSelectedMode(saved.selectedMode);
+          if (typeof saved.searchHidden === "boolean") setSearchHidden(saved.searchHidden);
+          if (typeof saved.tripMode === "boolean") setTripMode(saved.tripMode);
+          toast({ title: "🔄 Navigation Resumed", description: saved.destination.name });
+          return;
+        }
+      }
+    } catch {}
+
+    // No hand-off or session → if offline, restore the last cached route so navigation still works.
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       const cached = loadOfflineRoute();
       if (cached?.destination && cached.route) {
@@ -229,6 +277,29 @@ export default function NavigationPage() {
       }
     }
   }, []);
+
+  // Persist active navigation session to localStorage ONLY during active navigation or trips
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (destination && (isNavigating || tripMode)) {
+      try {
+        window.localStorage.setItem("nav.activeSession", JSON.stringify({
+          destination,
+          tripStops,
+          legIdx,
+          isNavigating,
+          selectedMode,
+          searchHidden,
+          tripMode,
+          startFrom: lockedStartRef.current
+        }));
+      } catch {}
+    } else {
+      try {
+        window.localStorage.removeItem("nav.activeSession");
+      } catch {}
+    }
+  }, [destination, tripStops, legIdx, isNavigating, selectedMode, searchHidden, tripMode]);
 
   // Cache route + alternates + nearby places for offline use.
   useEffect(() => {
@@ -272,16 +343,19 @@ export default function NavigationPage() {
     mapInstance.current = map;
     // User-initiated drag disables follow-mode so the map doesn't fight them
     map.on("dragstart", () => setFollowMode(false));
-    setTimeout(() => map.invalidateSize(), 100);
+    setTimeout(() => {
+      if (isMapReady(map)) map.invalidateSize();
+    }, 100);
     return () => {
-      map.remove();
+      try { map.remove(); } catch {}
+      mapInstance.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update map style when it changes
   useEffect(() => { 
-    if (tileRef.current) {
+    if (tileRef.current && isMapReady(mapInstance.current)) {
       tileRef.current.setUrl(tileUrls[mapStyle]); 
       // Update className dynamically (Leaflet doesn't have a direct method for this, so we manipulate the DOM element)
       const container = tileRef.current.getContainer();
@@ -297,7 +371,7 @@ export default function NavigationPage() {
 
   // Auto-center on user's location when it first becomes available
   useEffect(() => {
-    if (mapInstance.current && userPos && !route && !hasAutoCentered.current) {
+    if (isMapReady(mapInstance.current) && userPos && !route && !hasAutoCentered.current) {
       mapInstance.current.setView(userPos, 14);
       hasAutoCentered.current = true;
     }
@@ -305,7 +379,9 @@ export default function NavigationPage() {
 
   // When tilt mode flips, give Leaflet a beat to recompute its viewport.
   useEffect(() => {
-    const t = setTimeout(() => mapInstance.current?.invalidateSize(), 750);
+    const t = setTimeout(() => {
+      if (isMapReady(mapInstance.current)) mapInstance.current.invalidateSize();
+    }, 750);
     return () => clearTimeout(t);
   }, [isNavigating]);
 
@@ -320,7 +396,7 @@ export default function NavigationPage() {
   // Update start marker as GPS arrives
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map || !userPos) return;
+    if (!isMapReady(map) || !userPos) return;
     const accText = Math.round(fix?.accuracy ?? 0);
     const labelHtml = `
       <div role="img" aria-label="Your location, GPS signal ${reliability.label}${accText ? `, accurate within ${accText} meters` : ""}" style="position:relative;width:18px;height:18px;">
@@ -351,13 +427,21 @@ export default function NavigationPage() {
   // Update destination marker
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map) return;
+    if (!isMapReady(map)) return;
     destMarkerRef.current?.remove();
+    secondaryDestMarkerRef.current?.remove();
+
     if (destination) {
       destMarkerRef.current = L.marker([destination.lat, destination.lng], { icon: dot("#ef4444", 16) })
         .bindPopup(`🏁 ${destination.name}`).addTo(map);
     }
-  }, [destination?.id]);
+
+    if (tripStops.length > 1 && legIdx < tripStops.length - 1) {
+      const finalDest = tripStops[tripStops.length - 1];
+      secondaryDestMarkerRef.current = L.marker([finalDest.lat, finalDest.lng], { icon: dot("#6b7280", 14) })
+        .bindPopup(`🏁 ${finalDest.name} (Final Destination)`).addTo(map);
+    }
+  }, [destination?.id, tripStops, legIdx]);
 
   // Fetch route plan — only when destination or mode changes, NOT on every GPS update.
   // We lock the start position at fetch time so GPS drift does not trigger constant re-fetches
@@ -380,7 +464,7 @@ export default function NavigationPage() {
     setLoadingRoute(true);
     setRouteError(null);
 
-    fetchRoutePlan(frozenStart, [destination.lat, destination.lng], selectedMode)
+    fetchRoutePlan(frozenStart, [destination.lat, destination.lng], selectedMode, "Your Location", destination.name)
       .then(plan => {
         if (cancelled) return;
         // Only accept the result if it has real geometry (more than 2 coords = actual road route)
@@ -406,19 +490,48 @@ export default function NavigationPage() {
     return () => { cancelled = true; };
     // Intentionally excludes userPos/startPoint — GPS changes must NOT trigger route re-fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [destination?.id, selectedMode]);
+  }, [destination?.lat, destination?.lng, selectedMode]);
+
+  // Fetch secondary route if there's a side trip
+  useEffect(() => {
+    let cancelled = false;
+    if (tripStops.length > 1 && legIdx < tripStops.length - 1 && destination) {
+      const nextDest = tripStops[legIdx + 1];
+      fetchRoutePlan([destination.lat, destination.lng], [nextDest.lat, nextDest.lng], selectedMode, destination.name, nextDest.name)
+        .then(plan => {
+          if (!cancelled) setSecondaryRoute(plan.primary);
+        })
+        .catch(() => {
+          if (!cancelled) setSecondaryRoute(null);
+        });
+    } else {
+      setSecondaryRoute(null);
+    }
+    return () => { cancelled = true; };
+  }, [destination?.lat, destination?.lng, tripStops, legIdx, selectedMode]);
 
   // Draw primary + alternate polylines + eateries along the way.
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map) return;
+    if (!isMapReady(map)) return;
     polylineRef.current?.remove();
+    secondaryPolylineRef.current?.remove();
     traveledRef.current?.remove();
     altPolylinesRef.current.forEach(p => p.remove());
     altPolylinesRef.current = [];
     eateryMarkersRef.current.forEach(m => m.remove());
     eateryMarkersRef.current = [];
     if (!route) return;
+
+    // Draw secondary route first (underneath everything)
+    if (secondaryRoute) {
+      secondaryPolylineRef.current = L.polyline(secondaryRoute.coordinates, {
+        color: "hsl(220, 10%, 55%)", // gray
+        weight: 4,
+        opacity: 0.6,
+        dashArray: "8, 8",
+      }).addTo(map);
+    }
 
     // Draw alternates first (underneath), muted + dashed.
     if (!tripMode) {
@@ -447,19 +560,23 @@ export default function NavigationPage() {
       color: "hsl(162, 72%, 25%)", weight: 6, opacity: 1,
     }).addTo(map);
 
-    // Suggestions (eateries + gas stations) near the active route from API
+    // Suggestions near the active route from API
     const activeRoute = selectedAltIdx === 0 ? route : alternates[selectedAltIdx - 1] ?? route;
     const itemsNearRoute = suggestionsAlongRoute.filter(l =>
       activeRoute.coordinates.some(([rlat, rlng]) => Math.hypot(rlat - l.lat, rlng - l.lng) < 0.05)
     );
     itemsNearRoute.forEach(e => {
-      const isGas = e.type === "gas-station";
-      const iconEmoji = isGas ? "⛽" : "🍽️";
-      const iconColor = isGas ? "#3b82f6" : "#f59e0b"; // blue for gas, amber for food
-      const labelText = isGas ? "gas station along your route" : "along your route";
+      const loc = e as any;
+      let iconColor = "#6b7280"; // gray default
+      if (loc.type === "viewpoint") iconColor = "#22c55e"; // green
+      else if (loc.type === "restaurant" || loc.category === "food") iconColor = "#eab308"; // yellow
+      else if (loc.type === "hotel" || loc.type === "accommodation") iconColor = "#3b82f6"; // blue
+      else if (loc.type === "gas-station") iconColor = "#f97316"; // orange
       
-      const mk = L.marker([e.lat, e.lng], { icon: dot(iconColor, 10) })
-        .bindPopup(`<strong>${iconEmoji} ${e.name}</strong><br/><small>${e.rating ? e.rating + "★ " : ""}${labelText}</small>`).addTo(map);
+      const mk = L.marker([e.lat, e.lng], { icon: dot(iconColor, 12) }).addTo(map);
+      mk.on("click", () => {
+        setSelectedPlace(e);
+      });
       eateryMarkersRef.current.push(mk);
     });
 
@@ -471,13 +588,13 @@ export default function NavigationPage() {
       const maxZoom = selectedMode === "walk" ? 17 : selectedMode === "bike" ? 16 : 15;
       map.fitBounds(bounds, { padding: [40, 40], maxZoom });
     }
-  }, [route, alternates, selectedAltIdx, tripMode, selectedMode, suggestionsAlongRoute]);
+  }, [route, secondaryRoute, alternates, selectedAltIdx, tripMode, selectedMode, suggestionsAlongRoute]);
 
   // Live GPS follow: snap user position to the route, advance steps, voice prompts
   useEffect(() => {
     if (!isNavigating || !route || !userPos) return;
     const map = mapInstance.current;
-    if (!map) return;
+    if (!isMapReady(map)) return;
 
     // Update car marker = user position (with heading-aware arrow)
     if (!carMarkerRef.current) {
@@ -534,17 +651,49 @@ export default function NavigationPage() {
     }
   }, [isNavigating, cancelVoice]);
 
-  // Periodically suggest a nearby eatery while navigating
+  const lastSuggestedPlaceRef = useRef<string | null>(null);
+  const latestUserPos = useRef(userPos);
+  useEffect(() => { latestUserPos.current = userPos; }, [userPos]);
+
+  // Periodically suggest a nearby eatery or viewpoint while navigating
   useEffect(() => {
     if (!isNavigating || !route) return;
     const id = setInterval(() => {
-      const eateries = suggestionsAlongRoute.filter(l =>
-        (l.type === "restaurant" || l.type === "poi") &&
-        route.coordinates.some(([rlat, rlng]) => Math.hypot(rlat - l.lat, rlng - l.lng) < 0.05),
-      );
-      if (!eateries.length) return;
-      const pick = eateries[Math.floor(Math.random() * eateries.length)];
-      toast({ title: "🍽️ Eatery Ahead", description: `${pick.name} · ${pick.rating ?? ""}★` });
+      const pos = latestUserPos.current;
+      if (!pos) return;
+
+      const candidates = suggestionsAlongRoute.filter(l => {
+        const loc = l as any;
+        const dist = distanceMeters({ lat: pos[0], lng: pos[1] }, { lat: l.lat, lng: l.lng });
+        return (loc.type === "restaurant" || loc.type === "viewpoint" || loc.type === "hotel" || loc.type === "gas-station" || loc.category === "food" || loc.category === "lodging") &&
+          l.id !== lastSuggestedPlaceRef.current &&
+          dist <= 1000; // 500m - 1km radius threshold
+      });
+      if (!candidates.length) return;
+
+      // Find the nearest one
+      let nearest = candidates[0];
+      let minDistance = Infinity;
+      candidates.forEach(c => {
+        const d = distanceMeters({ lat: pos[0], lng: pos[1] }, { lat: c.lat, lng: c.lng });
+        if (d < minDistance) {
+          minDistance = d;
+          nearest = c;
+        }
+      });
+
+      lastSuggestedPlaceRef.current = nearest.id || nearest.name;
+      const isViewpoint = nearest.type === "viewpoint";
+      const isHotel = nearest.type === "hotel";
+      const icon = isViewpoint ? "📸" : isHotel ? "🏨" : "🍽️";
+      const title = isViewpoint ? "Viewpoint Nearby" : isHotel ? "Hotel Nearby" : "Eatery Ahead";
+
+      const distLabel = minDistance >= 1000 ? `${(minDistance / 1000).toFixed(1)}km` : `${Math.round(minDistance)}m`;
+
+      toast({ 
+        title: `${icon} ${title}`, 
+        description: `${nearest.name} is ${distLabel} away. ${nearest.rating ? nearest.rating + '★' : ''}` 
+      });
     }, 45000);
     return () => clearInterval(id);
   }, [isNavigating, route, suggestionsAlongRoute]);
@@ -764,11 +913,11 @@ export default function NavigationPage() {
           <motion.div
             key="dest-pill"
             initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="absolute top-4 left-4 z-30 w-full max-w-[280px]"
+            className="absolute top-4 left-4 z-30 w-full max-w-[280px] flex items-center gap-1.5"
           >
             <button
               onClick={() => setSearchHidden(false)}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-card/95 backdrop-blur-sm shadow-card-hover border border-border/50 text-left"
+              className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-card/95 backdrop-blur-sm shadow-card-hover border border-border/50 text-left hover:bg-muted/50 transition-colors"
             >
               <NavIcon className="w-4 h-4 text-primary flex-shrink-0" />
               <div className="flex-1 min-w-0">
@@ -778,6 +927,23 @@ export default function NavigationPage() {
               {tripStops.length > 0 && (
                 <Badge variant="outline" className="text-[9px] h-5">{legIdx + 1}/{tripStops.length}</Badge>
               )}
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                lockedStartRef.current = null;
+                setDestination(null);
+                setRoute(null);
+                setAlternates([]);
+                setIsNavigating(false);
+                setSearchHidden(false);
+                try { window.localStorage.removeItem("nav.activeSession"); } catch {}
+                toast({ title: "📍 Search Cleared", description: "Search for a new destination" });
+              }}
+              className="h-9 w-9 flex items-center justify-center rounded-xl bg-card/95 backdrop-blur-sm shadow-card-hover border border-border/50 text-muted-foreground hover:text-foreground hover:bg-destructive/10 transition-colors shrink-0"
+              title="Clear destination and search new place"
+            >
+              <X className="w-4 h-4" />
             </button>
           </motion.div>
         )}
@@ -961,6 +1127,11 @@ export default function NavigationPage() {
                   <div className="min-w-0 pr-2">
                     <h3 className="font-display font-bold text-[15px] truncate">{destination.name}</h3>
                     <p className="text-[10px] text-muted-foreground truncate">{destination.address || destination.description || "Unknown address"}</p>
+                    {tripStops.length > 0 && legIdx < tripStops.length - 1 && (
+                      <p className="text-[11px] font-semibold text-indigo-500 mt-1 flex items-center gap-1">
+                        <Map className="w-3 h-3" /> Side Trip — Then to: {tripStops[tripStops.length - 1].name}
+                      </p>
+                    )}
                     {showToll && (
                       <div className="flex items-center gap-1 text-[10px] font-semibold text-warning mt-1">
                         <Badge variant="outline" className="text-[8px] h-[16px] px-1 border-warning/30 text-warning bg-warning/10">Tolls</Badge>
@@ -979,14 +1150,82 @@ export default function NavigationPage() {
                 </div>
               )}
 
+              {/* Commute Mode customization bar — active when mode is transit */}
+              {selectedMode === "transit" && destination && (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-primary/5 border border-primary/20 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🚌</span>
+                    <div>
+                      <p className="font-bold text-[11px] text-primary">Public Commute Mode</p>
+                      <p className="text-[9px] text-muted-foreground">
+                        {route?.transit_segments?.length 
+                          ? `${route.transit_segments.length} custom / GTFS transit legs` 
+                          : "Scheduled GTFS & local transit legs"}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowTransitEditor(true)}
+                    className="h-7 text-[10px] gap-1 font-semibold border-primary/30 text-primary hover:bg-primary/10"
+                  >
+                    <Plus className="w-3 h-3" /> Custom Legs
+                  </Button>
+                </div>
+              )}
+
               {destination && (
-                <RouteDetailsPanel routeCoords={route?.coordinates} mode={selectedMode} speedLimits={speedLimits} steps={route?.steps} />
+                <RouteDetailsPanel routeCoords={route?.coordinates} mode={selectedMode} speedLimits={speedLimits} steps={route?.steps} transitSegments={route?.transit_segments} onSelectPlace={setSelectedPlace} />
               )}
 
             </motion.div>
           )}
         </AnimatePresence>
       </motion.div>
+
+      {/* Custom Transit Chain Modal for Commute mode in Navigation */}
+      {showTransitEditor && (
+        <TransitSegmentEditorModal
+          open={showTransitEditor}
+          onOpenChange={setShowTransitEditor}
+          stopName={destination?.name || "Commute Route"}
+          initialSegments={route?.transit_segments}
+          onSave={(segments) => {
+            if (route) {
+              const totalMins = segments.reduce((s, seg) => s + (seg.durationMinutes || 0), 0);
+              const updatedRoute: RouteResult = {
+                ...route,
+                duration: totalMins > 0 ? totalMins * 60 : route.duration,
+                transit_segments: segments,
+              };
+              setRoute(updatedRoute);
+            }
+            setShowTransitEditor(false);
+          }}
+        />
+      )}
+
+      <PlaceDetailsSheet
+        place={selectedPlace}
+        open={selectedPlace !== null}
+        onOpenChange={(open) => !open && setSelectedPlace(null)}
+        showDirections={true}
+        onNavigate={(p, action) => {
+          if (action === "add-side-trip" && destination) {
+            const finalDest = tripStops.length > 0 ? tripStops[tripStops.length - 1] : destination;
+            setTripStops([p, finalDest]);
+            setLegIdx(0);
+            setDestination(p);
+          } else {
+            setDestination(p);
+            setTripStops([]);
+            setLegIdx(0);
+          }
+          setSelectedPlace(null);
+        }}
+      />
     </div>
   );
 }

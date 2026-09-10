@@ -1,4 +1,4 @@
-export type TransitType = "car" | "bus" | "train" | "plane" | "ferry" | "bike" | "walk";
+export type TransitType = "car" | "bus" | "train" | "plane" | "ferry" | "bike" | "walk" | "jeepney" | "tricycle" | "uv_express" | "custom";
 export type TripStatus = "planning" | "active" | "completed" | "cancelled";
 export type WeatherCondition = "sunny" | "cloudy" | "rainy" | "stormy" | "snowy" | "foggy" | "windy";
 export type ReportType = "trip-summary" | "expense" | "itinerary" | "analytics";
@@ -22,6 +22,21 @@ export interface Location {
   reviews_data?: any[];
 }
 
+export interface TransitSegment {
+  id: string;
+  type: TransitType;
+  title: string;                 // e.g. "Tricycle to Mayantoc Crossing"
+  departureName?: string;        // e.g. "Capas Junction"
+  arrivalName?: string;          // e.g. "Mayantoc Town Plaza"
+  durationMinutes?: number;      // Estimated duration in mins
+  costEstimate?: number;          // Estimated fare in PHP
+  distanceKm?: number;            // Distance in km
+  agency?: string;               // e.g. "Victory Liner" or "LRT Line 1"
+  lineName?: string;             // e.g. "Route 4 / Bus 102"
+  instructions?: string;         // e.g. "Board at Bay 3, alight at Crossing"
+  polyline?: string;             // Polyline for map display
+}
+
 export interface ItineraryStop {
   id: string;
   location: Location;
@@ -29,6 +44,7 @@ export interface ItineraryStop {
   departureTime: string;
   notes: string;
   transitType: TransitType;
+  transitSegments?: TransitSegment[];
   weather?: WeatherCondition;
   temperature?: number;
   isCompleted: boolean;
