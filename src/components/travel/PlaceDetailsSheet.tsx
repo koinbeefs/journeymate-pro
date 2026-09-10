@@ -42,8 +42,15 @@ const HISTORY: Record<string, string> = {
   landmark: "An iconic landmark that has served as a cultural anchor and meeting point for generations.",
   hotel: "A welcoming accommodation hub offering rest, local hospitality, and convenient access to nearby attractions.",
   restaurant: "A beloved dining spot celebrated for local flavors, signature dishes, and authentic culinary traditions.",
-  "gas-station": "A essential transit stop providing fuel, conveniences, and refresh amenities along main highways.",
-  viewpoint: "Formed by volcanic uplift, this ridge offers one of the most photographed panoramas in the country. Best visited near sunrise or just before sunset.",
+  "gas-station": "An essential transit stop providing fuel, conveniences, and refresh amenities along main highways.",
+  viewpoint: "Formed by scenic terrain uplift, this vantage point offers panoramic views of the surrounding countryside and landscapes.",
+  shopping: "A bustling commercial center offering retail stores, local delicacies, dining, and family entertainment.",
+  mall: "A popular shopping and leisure hub featuring top retail brands, restaurants, cinema, and air-conditioned comfort.",
+  park: "A peaceful green sanctuary providing fresh air, walking trails, leisure spaces, and outdoor recreation.",
+  museum: "A cultural treasure trove showcasing historical artifacts, art collections, and heritage exhibits.",
+  beach: "A beautiful coastal destination known for tropical waters, sandy shores, and relaxing beachside activities.",
+  transit: "A strategic transport node connecting travelers to key provincial destinations and city corridors.",
+  custom: "A custom itinerary location curated for your travel route.",
 };
 
 const TYPE_IMAGES: Record<string, string[]> = {
@@ -64,6 +71,18 @@ const TYPE_IMAGES: Record<string, string[]> = {
     "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=800&q=80",
     "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=800&q=80",
   ],
+  shopping: [
+    "https://images.unsplash.com/photo-1555529669-e69e7aa0ba9a?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1567401893414-76b7b1e5a7a5?auto=format&fit=crop&w=800&q=80",
+  ],
+  mall: [
+    "https://images.unsplash.com/photo-1555529669-e69e7aa0ba9a?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1567401893414-76b7b1e5a7a5?auto=format&fit=crop&w=800&q=80",
+  ],
+  park: [
+    "https://images.unsplash.com/photo-1519331379826-f10be5486c6f?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=800&q=80",
+  ],
   default: [
     "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=800&q=80",
     "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80",
@@ -72,8 +91,11 @@ const TYPE_IMAGES: Record<string, string[]> = {
 
 function galleryFor(loc: Location | null): { src: string; by: string; source: "Imported" | "App user" }[] {
   if (!loc) return [];
-  if (loc.imageUrl) return [{ src: loc.imageUrl, by: "Official", source: "Imported" }];
-  const type = loc.type || "default";
+  const directImg = loc.imageUrl || (loc as any).photoUrl;
+  if (directImg && typeof directImg === "string" && directImg.trim()) {
+    return [{ src: directImg, by: "Official", source: "Imported" }];
+  }
+  const type = (loc.type || "default").toLowerCase();
   const urls = TYPE_IMAGES[type] || TYPE_IMAGES.default;
   return urls.map((src, i) => ({
     src,
@@ -108,35 +130,68 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, o
     }
 
     const cacheKey = place.id || `${place.name}_${place.lat}_${place.lng}`;
-    if (placeDetailsCache[cacheKey]) {
-      setDetailedPlace(placeDetailsCache[cacheKey]);
+    const cached = placeDetailsCache[cacheKey];
+
+    // Only return cached directly if it has been fully enriched
+    if (cached && (cached as any)._enriched) {
+      setDetailedPlace(cached);
       return;
+    }
+
+    if (cached) {
+      setDetailedPlace(cached);
+    } else {
+      setDetailedPlace(place);
     }
 
     let mounted = true;
     async function fetchDetails() {
+      // Clean up common itinerary stop prefixes so searching finds real place
+      const cleanName = place!.name
+        .replace(/^(walk|transfer|jeepney|bus|tricycle|drive)\s+to\s+/i, "")
+        .replace(/^(entrance|drop-off|start|station|terminal)\s+of\s+/i, "")
+        .replace(/\s*\([^)]*\)/g, "")
+        .trim();
+
       setLoadingDetails(true);
       try {
         const response = await placesApi.search({
           lat: place!.lat,
           lng: place!.lng,
-          query: place!.name,
+          query: cleanName || place!.name,
           _t: Date.now()
         } as any);
-        
-        const results = response.data as Location[];
-        const match = results.find(r => r.name.toLowerCase().includes(place!.name.toLowerCase())) || results[0];
-        
+
+        const rawData = response.data;
+        const results: Location[] = Array.isArray(rawData)
+          ? rawData
+          : Array.isArray(rawData?.data)
+          ? rawData.data
+          : Array.isArray(rawData?.places)
+          ? rawData.places
+          : [];
+
+        const targetQuery = (cleanName || place!.name).toLowerCase();
+        const match = results.find(r =>
+          r.name.toLowerCase().includes(targetQuery) ||
+          targetQuery.includes(r.name.toLowerCase())
+        ) || results[0];
+
         if (match && mounted) {
-          const merged = { ...place, ...match, id: place!.id };
+          const merged = { ...place, ...match, id: place!.id, _enriched: true };
           placeDetailsCache[cacheKey] = merged;
           setDetailedPlace(merged);
         } else if (mounted) {
-          setDetailedPlace(place);
+          const fallback = { ...place, _enriched: true };
+          placeDetailsCache[cacheKey] = fallback;
+          setDetailedPlace(fallback);
         }
       } catch (err) {
         console.error("Failed to fetch place details:", err);
-        if (mounted) setDetailedPlace(place);
+        if (mounted) {
+          const fallback = { ...place, _enriched: true };
+          setDetailedPlace(fallback);
+        }
       } finally {
         if (mounted) setLoadingDetails(false);
       }
@@ -147,16 +202,16 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, o
   }, [place, open]);
 
   const currentPlace = detailedPlace || place;
-  
+
   const { reviews: fetchedReviews, createReview } = useReviews(
     currentPlace ? { placeName: currentPlace.name, placeId: currentPlace.id } : undefined
   );
 
   const userReviews = useMemo(
-    () => currentPlace ? fetchedReviews.filter((r: any) => 
-      (r.place_id && r.place_id === currentPlace.id) || 
-      (r.place_name && r.place_name.toLowerCase() === currentPlace.name.toLowerCase()) ||
-      r.locationId === currentPlace.id
+    () => currentPlace ? fetchedReviews.filter((r: any) =>
+      (r.place_id && String(r.place_id) === String(currentPlace.id)) ||
+      (r.place_name && r.place_name.toLowerCase().trim() === currentPlace.name.toLowerCase().trim()) ||
+      (r.locationId && String(r.locationId) === String(currentPlace.id))
     ) : [],
     [currentPlace, fetchedReviews],
   );
@@ -179,26 +234,27 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, o
   const allReviews = useMemo(() => {
     if (!currentPlace) return [];
     const app = userReviews.map((r: any) => ({
-      kind: "app" as const, 
-      id: r.id, 
-      author: r.user?.name || r.user?.username || r.userName || "Traveler", 
+      kind: "app" as const,
+      id: r.id,
+      author: r.user?.name || r.user?.username || r.userName || "Traveler",
       avatar: r.user?.profile_pic || r.userAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(r.user?.username || r.user?.name || "A")}`,
-      rating: r.rating, 
-      text: r.review_text || r.comment, 
+      rating: r.rating,
+      text: r.review_text || r.comment,
       photos: r.photos || [],
-      source: "App User" as const, 
+      source: "App User" as const,
       timestamp: r.created_at || r.timestamp || new Date().toISOString(),
     }));
-    const extReviews = currentPlace.reviews_data || [];
+    const rawExt = currentPlace.reviews_data || (currentPlace as any).reviews;
+    const extReviews = Array.isArray(rawExt) ? rawExt : [];
     const ext = extReviews.map((r: any, i: number) => ({
-      kind: "ext" as const, 
-      id: `g-${i}`, 
-      author: r.author, 
+      kind: "ext" as const,
+      id: `g-${i}`,
+      author: r.author,
       avatar: r.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(r.author || "G")}`,
-      rating: r.rating, 
-      text: r.text, 
+      rating: r.rating,
+      text: r.text,
       photos: [],
-      source: r.source || "Google", 
+      source: r.source || "Google",
       timestamp: r.timestamp || new Date().toISOString(),
     }));
     let merged = [...app, ...ext];
@@ -218,21 +274,36 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, o
     let importedPhotos: { src: string; by: string; source: "Imported" | "App user" }[] = [];
     if (currentPlace.photo_references && currentPlace.photo_references.length > 0) {
       importedPhotos = currentPlace.photo_references.map(ref => ({
-        src: placesApi.getPhoto(ref),
+        src: typeof ref === "string" ? placesApi.getPhoto(ref) : (ref as any).src || placesApi.getPhoto((ref as any).name || (ref as any).photo_reference),
         by: "Google",
         source: "Imported" as const,
       }));
+    } else if ((currentPlace as any).photo_reference) {
+      importedPhotos = [{
+        src: placesApi.getPhoto((currentPlace as any).photo_reference),
+        by: "Google",
+        source: "Imported" as const,
+      }];
     } else {
       importedPhotos = galleryFor(currentPlace);
     }
+
+    if (importedPhotos.length === 0) {
+      importedPhotos = galleryFor(currentPlace);
+    }
+
     return [...userReviewPhotos, ...importedPhotos];
   }, [currentPlace, userReviewPhotos]);
 
   if (!place) return null;
-  const history = (currentPlace as any)?.editorial_summary || 
-                  (currentPlace as any)?.editorialSummary?.text || 
-                  HISTORY[currentPlace?.type || "poi"] || 
-                  "No historical details available for this place yet.";
+
+  const history = (currentPlace as any)?.editorial_summary ||
+                  (currentPlace as any)?.editorialSummary?.text ||
+                  (currentPlace as any)?.editorialSummary ||
+                  (currentPlace as any)?.description ||
+                  HISTORY[currentPlace?.type || ""] ||
+                  HISTORY[(currentPlace as any)?.category || ""] ||
+                  `Explore ${currentPlace?.name || 'this destination'}, a cherished stop featuring local attractions, vibrant surroundings, and authentic experiences for travelers.`;
 
   const handleShare = () => {
     navigator.clipboard.writeText(`Check out ${currentPlace.name} on Intellitravel!`);
@@ -331,7 +402,11 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, o
                 <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">{currentPlace.name}</h2>
                 <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                   <MapPin className="w-3 h-3 flex-shrink-0 text-primary" />
-                  <span className="truncate">{currentPlace.address || "Tagaytay City, Cavite"}</span>
+                  <span className="truncate">
+                    {currentPlace.address ||
+                      ((currentPlace as any).city ? `${(currentPlace as any).city}, Philippines` : "") ||
+                      (currentPlace.lat && currentPlace.lng ? `${currentPlace.lat.toFixed(4)}, ${currentPlace.lng.toFixed(4)}` : "Philippines")}
+                  </span>
                 </p>
               </div>
             </div>
@@ -341,7 +416,7 @@ export function PlaceDetailsSheet({ place, open, onOpenChange, showDirections, o
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1 text-accent font-bold text-sm">
                     <Star className="w-4 h-4 fill-accent" />
-                    <span>{currentPlace.rating ? Number(currentPlace.rating).toFixed(1) : "4.7"}</span>
+                    <span>{currentPlace.rating ? Number(currentPlace.rating).toFixed(1) : "4.5"}</span>
                   </div>
                   <span className="text-muted-foreground text-xs">({allReviews.length} reviews)</span>
                 </div>
